@@ -1,0 +1,8 @@
+{
+  "phone_number": "+919744554079",
+  "prompt": "You are an AI assistant making a call. Be polite, clear, and helpful. Keep responses brief. find out if everything is alright",
+  "deepgram_model": "aura-2-thalia-en",
+  "voice": "alloy",
+  "save_recording": true,
+  "max_duration": 600
+}
