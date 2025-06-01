@@ -34,6 +34,7 @@ Thumbs.db
 
 # Knowledge bases
 knowledge_bases/
+data/
 
 # Audio recordings
 *.wav
