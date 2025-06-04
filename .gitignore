@@ -3,6 +3,9 @@
 
 # Python bytecode
 __pycache__/
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
 *.py[cod]
 *$py.class
 
@@ -13,20 +16,19 @@ build/
 
 # Virtual environments
 venv/
+.venv/
 env/
 ENV/
-
-# IDE specific files
-.idea/
-.vscode/
-*.swp
-*.swo
+virtualenv/
+**/.env
+**/venv/
 
 # Logs
 *.log
 *.log.*
-
-*.wav
+debug_log.txt
+*debug*.log
+*debug*.txt
 
 # OS specific files
 .DS_Store
@@ -34,9 +36,23 @@ Thumbs.db
 
 # Knowledge bases
 knowledge_bases/
+
+# Data folder - exclude all contents
 data/
+data/*
 
-# Audio recordings
+# Audio files - all formats
 *.wav
+*.mp3
+*.ulaw
+*.ogg
+*.flac
+*.m4a
+*.aac
+*.wma
+*.amr
+*.aiff
+*.au
 
+# Database files
 *.db

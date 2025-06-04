@@ -1,3 +1,0 @@
-2025-06-01 13:24:42,899 - twilio_handler_realtime - ERROR - Error in FastAPI server thread: name 'uvicorn' is not defined
-2025-06-01 13:51:15,526 - twilio_handler_realtime_humanlike - ERROR - Error in FastAPI server thread: name 'uvicorn' is not defined
-2025-06-01 13:53:56,629 - twilio_handler_realtime_humanlike - ERROR - Error in FastAPI server thread: 'TwilioHandler' object has no attribute 'app'
