@@ -56,12 +56,17 @@ def setup_logger(level='INFO'):
         raise ValueError(f'Invalid log level: {level}')
     
     # Create logger
+  
+
     logger = logging.getLogger('OpenDeep')
     logger.setLevel(numeric_level)
     
     # Remove existing handlers if any
     if logger.handlers:
-        logger.handlers.clear()
+        for handler in logger.handlers[:]: # Iterate over a copy
+            logger.removeHandler(handler)
+            handler.close() # Important to close handlers before removing
+
     
     # Create console handler with UTF-8 encoding
     console_handler = EncodingStreamHandler(sys.stdout, encoding='utf-8')

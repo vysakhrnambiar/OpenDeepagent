@@ -45,14 +45,14 @@ import uvicorn
 import requests
 
 # Get the logger
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(f"OpenDeep.{__name__}") # <--- THE CRITICAL CHANGE
 
 
 class TwilioHandler:
     """Handler for Twilio integration with Media Streams using FastAPI and OpenAI Realtime."""
     
     def __init__(self, config, twilio_to_api_queue=None, api_to_twilio_queue=None,
-                 api_ready_event=None, stop_event=None):
+                 api_ready_event=None, stop_event=None,logger=None):
         """
         Initialize the Twilio handler.
         
@@ -63,6 +63,9 @@ class TwilioHandler:
             api_ready_event (threading.Event): Event to signal API readiness
             stop_event (threading.Event): Event to signal stop
         """
+        print(" Initialize Twilio Handler")
+        logger = logging.getLogger(__name__)
+        logger.info("INIT Twilio handler")
         self.config = config
         self.client = self._initialize_client()
         self.call = None
@@ -172,7 +175,7 @@ class TwilioHandler:
             openai_headers = {
                 "Authorization": f"Bearer {self.config.openai_api_key}",
                 "OpenAI-Beta": "realtime=v1",
-                "modalities": ["text", "audio"]
+                "modalities": ["text"]
             }
             
             self.openai_ws = await websockets.connect(
@@ -235,6 +238,7 @@ class TwilioHandler:
             deepgram_read_task = None
             if self.deepgram_ws:
                 deepgram_read_task = asyncio.create_task(self._api_handle_deepgram_read())
+                logger.info("Deep Gram is ALive")
             queue_to_openai_task = asyncio.create_task(self._api_handle_queue_to_openai())
             
             # Keep running until stop event is set
@@ -242,6 +246,7 @@ class TwilioHandler:
                 # Check if we can send the initial hello (only if it hasn't been sent yet)
                 if not self.initial_hello_sent:
                     await self._maybe_send_initial_hello(self.openai_ws)
+                    logger.info("Initial hello sent")
                 
                 await asyncio.sleep(.3)  # Small sleep to prevent CPU hogging
             
@@ -1116,13 +1121,13 @@ class TwilioHandler:
                 "output_audio_format": "g711_ulaw",
                 "voice": self.config.voice,
                 "instructions": self.system_prompt if self.system_prompt else self.config.get_system_prompt(),
-                "modalities": ["text", "audio"],
+                "modalities": ["text"],
                 "temperature": 0.8,
             }
         }
         logger.debug(f'Sending session update to OpenAI: {json.dumps(session_update)}')
         await openai_ws.send(json.dumps(session_update))
-        logger.info('Session update sent to OpenAI with modalities: ["text", "audio"]')
+        logger.info('Session update sent to OpenAI with modalities: ["text"')
         
     def start_stream_server(self, port=8080):
         """
@@ -1292,6 +1297,7 @@ class TwilioHandler:
             loop = asyncio.get_running_loop()
             
             # Connect to Deepgram TTS first (if enabled)
+            logger.info("Just before Deepgram")
             if self.use_deepgram_tts and not self.deepgram_ws:
                 logger.info("Connecting to Deepgram TTS API...")
                 self.deepgram_ws = await self._connect_to_deepgram(twilio_websocket=twilio_websocket)
@@ -1306,7 +1312,7 @@ class TwilioHandler:
                 openai_headers = {
                     "Authorization": f"Bearer {self.config.openai_api_key}",
                     "OpenAI-Beta": "realtime=v1",
-                    "modalities": ["text", "audio"]  # Enable both text and audio modalities
+                    "modalities": ["text"]  # Enable both text and audio modalities
                 }
                 
                 self.openai_ws = await websockets.connect(
