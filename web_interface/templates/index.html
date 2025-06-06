@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenDeep - Campaign Creator</title>
+    <!-- We will create style.css in the next step -->
+    <link rel="stylesheet" href="/static/css/style.css"> 
+</head>
+<body>
+    <div class="chat-container">
+        <div class="header">
+            <h1>OpenDeep Campaign Assistant</h1>
+            <div class="user-info">
+                <label for="username">Username:</label>
+                <input type="text" id="username" value="APPU">
+            </div>
+        </div>
+        <div id="chat-history" class="chat-history">
+            <!-- Chat messages will be dynamically inserted here -->
+        </div>
+        <div class="chat-input-area">
+            <textarea id="chat-input" placeholder="Describe your calling campaign goal..."></textarea>
+            <button id="send-btn">Send</button>
+        </div>
+    </div>
+
+    <!-- Load the external JavaScript file -->
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

@@ -478,3 +478,145 @@ Redis failure will break live call command execution.
 OpenAI API failure will prevent new prompt generation, analysis, and live AI interaction.
 The CallAttemptHandler should aim to gracefully terminate its current call attempt and mark it for analysis if its dependent services (like OpenAI Realtime via AudioSocketHandler) become unavailable during a live call.
 This explicitly outlines how the system aims to be resilient and ensure tasks are not lost due to common operational issues, pushing them back into the analysis loop for a decision
+
+
+#############################################################
+You are absolutely right. The context has become too large, and my responses are degrading. Your diagnosis is correct, and your proposed solution—creating a compressed, definitive master prompt for a new session—is the perfect way to move forward.
+
+I will now generate that complete, consolidated "State of the Project" document. It will capture everything: our final architectural decisions, the code we've created, the known bugs in the frontend, and a detailed, phase-by-phase plan for the remaining work.
+
+Please copy this entire response. It is designed to be your first message in our new chat.
+
+OpenDeep - Master Project State & Forward Plan
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system. The platform will feature a conversational UI for users to collaboratively define calling tasks with an AI assistant. A backend orchestrator will then schedule these tasks, which are executed via Asterisk. The system will handle live conversations using a real-time voice AI, and a separate analysis AI will assess call outcomes and manage next steps like retries or final reporting.
+
+Core Philosophy:
+
+Quality & User Experience First: Each component will be built to a high standard before moving on.
+
+Separation of AI Concerns:
+
+UI Assistant: A conversational LLM helps users build a detailed plan.
+
+Orchestrator Agent: An LLM with function-calling executes the plan.
+
+Live Call Agent: A real-time voice LLM handles the live call.
+
+Analysis Agents: LLMs for post-call assessment and final campaign summaries.
+
+Multi-Tenancy: The system is designed to support multiple distinct users.
+
+Current Status & Known Issues
+
+Phase 1 (Interactive UI Foundation): Partially Complete, with Bugs.
+
+We have successfully created the foundational code for a conversational UI where a user can interact with an AI assistant. The backend service (UIAssistantService) and its supporting prompts (UI_ASSISTANT_SYSTEM_PROMPT) are designed to be general-purpose and can handle a variety of user requests.
+
+KNOWN BUGS TO FIX IMMEDIATELY:
+
+Frontend Form Submission Bug: When the UI Assistant asks questions and renders an interactive form, clicking the "Submit Answers" button does not work correctly. The page seems to clear or not send the data properly. This needs to be debugged and fixed in web_interface/static/js/main.js.
+
+AI Prompt "Campaign" Fixation: The current UI_ASSISTANT_SYSTEM_PROMPT sometimes makes the AI sound too focused on creating "campaigns" even for single-call tasks. We need to refine the prompt to use more general language like "task" or "plan" and only use "campaign" when it's clearly a batch of calls.
+
+File Structure & Code Created So Far (* = has content)
+vysakhrnambiar-opendeepagent/
+├── README.md
+├── requirements.txt            *
+├── config/
+│   ├── app_config.py           *
+│   └── prompt_config.py        * (Needs a final tweak for the "campaign" language bug)
+├── database/
+│   ├── schema.sql              * (Includes users, campaigns, tasks with campaign_id)
+│   ├── models.py               * (Includes User, Campaign, and updated Task models)
+│   └── db_manager.py           * (Includes get_or_create_user and campaign functions)
+├── llm_integrations/
+│   ├── __init__.py             *
+│   └── openai_form_client.py   *
+├── task_manager/
+│   ├── __init__.py             *
+│   └── ui_assistant_svc.py     * (The service for the conversational UI)
+├── web_interface/
+│   ├── __init__.py             *
+│   ├── app.py                  * (Instantiates and serves the app)
+│   ├── routes_api.py           * (Has the single `/api/chat_interaction` endpoint)
+│   ├── routes_ui.py            * (Serves index.html)
+│   ├── static/
+│   │   └── css/
+│   │       └── style.css       * (CSS for the chat UI)
+│   │   └── js/
+│   │       └── main.js         * (Has the interactive chat logic, but contains the form submission bug)
+│   └── templates/
+│       └── index.html          * (The HTML container for the chat UI)
+└── (Other empty/scaffolded files and directories)
+
+
+Empty Files/Directories To Be Created:
+
+main.py
+
+task_manager/orchestrator_svc.py
+
+task_manager/task_scheduler_svc.py
+
+call_processor_service/* (all files)
+
+audio_processing_service/* (all files)
+
+post_call_analyzer_service/* (all files)
+
+campaign_summarizer_service/* (new directory and files)
+
+Detailed Plan for Remaining Work
+
+Phase 1.5: Fixes & Finalization (IMMEDIATE NEXT STEPS)
+
+Fix UI Bug: Debug and correct the JavaScript in web_interface/static/js/main.js so that submitting answers in the interactive form works correctly.
+
+Refine UI Assistant Prompt: Tweak the UI_ASSISTANT_SYSTEM_PROMPT in config/prompt_config.py to use more general language ("task," "plan") and avoid sounding fixated on "campaigns."
+
+Implement Confirmation Step: In main.js, make the "Confirm and Schedule Campaign" button functional. When clicked, it should call a new API endpoint.
+
+Phase 2: LLM Campaign Orchestration
+
+Goal: Enable the "Confirm and Schedule Campaign" button to trigger the automated creation of all necessary tasks in the database.
+
+Create task_manager/orchestrator_svc.py: This service will use the OpenAIFormClient with the ORCHESTRATOR_SYSTEM_PROMPT and a function-calling definition for a schedule_call_batch tool.
+
+Update db_manager.py: Ensure the create_batch_of_tasks function is robust.
+
+Update routes_api.py: Add a new endpoint, /api/execute_campaign, which will be called by the confirmation button. This endpoint will use the OrchestratorService to process the final campaign_plan JSON and create the tasks in the database via the schedule_call_batch function.
+
+Phase 3: Call Execution Engine
+
+Goal: To pick up scheduled tasks from the database and make real phone calls via Asterisk.
+
+Create task_manager/task_scheduler_svc.py: A background service that polls the tasks table for due items.
+
+Create call_processor_service/call_initiator_svc.py: Manages concurrency and starts call attempts.
+
+Create call_processor_service/asterisk_ami_client.py: Handles the low-level connection and command sending to the Asterisk Manager Interface (AMI).
+
+Create call_processor_service/call_attempt_handler.py: A master process for a single call's lifecycle, from originating the call to updating its final status in the database.
+
+Phase 4: Realtime Audio & Live Agent Interaction
+
+Goal: To bridge the live Asterisk call to the OpenAI Realtime Voice AI.
+
+Create audio_processing_service/audio_socket_server.py: A TCP server that listens for connections from Asterisk's AudioSocket() application.
+
+Create audio_processing_service/audio_socket_handler.py: Handles a single call's audio stream, communicates with the OpenAIRealtimeClient, logs transcripts, and publishes commands (like end_call) from the AI to Redis.
+
+Create audio_processing_service/openai_realtime_client.py: A wrapper for the OpenAI Realtime Audio WebSocket.
+
+Phase 5: Post-Call Analysis & Reporting
+
+Goal: To intelligently assess call outcomes and provide final reports to the user.
+
+Create post_call_analyzer_service/analysis_svc.py: The "Assessor" agent. Polls for finished calls, analyzes their transcripts against the goal, and updates the task status (e.g., success, retry, failed).
+
+Create campaign_summarizer_service/summarizer_svc.py: The "Summarizer" agent. Polls for fully completed campaigns (all tasks in a batch are done), gathers all individual outcomes, and uses an LLM to generate a final, unified summary report.
+
+Update UI: Create new pages/components in the UI to display campaign statuses and final reports to the user.
+
+Final End Goal: A user can log in, describe a complex calling task in natural language, have the AI assistant help them refine it into an actionable plan, and then execute that plan automatically. The system will make the calls, handle conversations, analyze the results, and provide a comprehensive final report, all with minimal human intervention.
