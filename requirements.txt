@@ -12,3 +12,4 @@ py-asterisk # For Asterisk AMI communication (provides asterisk.ami)
 # For SQLite with SQLAlchemy
 # (No separate driver needed, SQLAlchemy has built-in support)
 jinja2>=3.0.0
+google-generativeai

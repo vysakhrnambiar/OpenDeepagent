@@ -620,3 +620,266 @@ Create campaign_summarizer_service/summarizer_svc.py: The "Summarizer" agent. Po
 Update UI: Create new pages/components in the UI to display campaign statuses and final reports to the user.
 
 Final End Goal: A user can log in, describe a complex calling task in natural language, have the AI assistant help them refine it into an actionable plan, and then execute that plan automatically. The system will make the calls, handle conversations, analyze the results, and provide a comprehensive final report, all with minimal human intervention.
+
+
+###################################################################################
+# OpenDeep - Master Project State & Forward Plan
+
+---
+## 1. META-INSTRUCTIONS FOR THE AI
+**(Your Role and Goal)**
+You are a development assistant AI. Your primary responsibility is to maintain this `Wayforward.md` document. This file is the single source of truth for our project. Your goal is to ensure it is always up-to-date and complete.
+
+**(Your Task)**
+When the user asks you to "update the Wayforward file," your task is to:
+1.  Read this ENTIRE document.
+2.  Read the full transcript of the conversation that has occurred *since this version was created*.
+3.  Generate a NEW, COMPLETE `Wayforward.md` file as your output. This new file must integrate the progress and decisions from the latest conversation.
+
+**(Update Rules - CRITICAL)**
+- **Preserve History:** Do not remove information from previous versions. Add to it.
+- **Increment Version:** The first thing you must do is increment the `Version` number below.
+- **Update Changelog:** Add new entries to the `Changelog` summarizing what was accomplished in the latest session.
+- **Update File Status:** Change the status of files in the `Detailed File Structure` from `[Planned]` to `[Created]` or `[Modified]` as we work on them.
+- **Integrate Decisions:** Weave new architectural decisions, bug fixes, or functionality changes into the appropriate sections (`Core Architecture`, `Changelog`, etc.).
+- **Update Next Steps:** Define the immediate next task for our next session.
+- **RECURSION:** You MUST copy these "META-INSTRUCTIONS" verbatim into the new version you generate so that the next AI instance knows its role.
+
+---
+## 2. Project State
+
+**Version:** 2.0
+
+**Project Goal:** To build a robust, multi-tenant, AI-powered outbound calling system. The platform will feature a conversational UI for users to collaboratively define calling tasks with an AI assistant. A backend orchestrator will then schedule these tasks, which are executed via Asterisk. The system will handle live conversations using a real-time voice AI, and a separate analysis AI will assess call outcomes and manage next steps like retries or final reporting.
+
+**Core Philosophy:**
+*   **Quality First:** Components are built to a high standard before moving on.
+*   **Separation of AI Concerns:** Different AIs for UI assistance, orchestration, live calls, and analysis.
+*   **Tool-Augmented AI:** The UI Assistant MUST NOT hallucinate facts. It must use tools (like internet search) to find real-world data.
+*   **Multi-Tenancy:** The system is designed to support multiple distinct users.
+
+**Current State of Development:**
+*   **Phase 1 (UI Foundation):** Complete.
+*   **Phase 1.5 (Fixes & Search Tool):** Complete.
+*   **Next:** Phase 2 (LLM Campaign Orchestration).
+
+### 2.1. Changelog / Revision History
+
+*   **v2.0 (Current):**
+    *   **Feature:** Implemented a generic `search_internet` tool. The UI Assistant is no longer restricted to business searches and can query for any information (e.g., products, general knowledge).
+    *   **Refactor:** Updated `ui_assistant_svc.py` to a more robust tool-calling loop.
+    *   **Refactor:** Created `tools/information_retriever_svc.py` and `llm_integrations/google_gemini_client.py` to support the new search functionality.
+    *   **Fix:** Resolved `ModuleNotFoundError` for `google.generativeai` by providing correct `pip install` instructions.
+    *   **Meta:** Redefined this `Wayforward.md` file to be a self-sustaining, regenerative context document.
+
+*   **v1.0:**
+    *   **Fix:** Corrected the non-functional "Submit Answers" button in the frontend form.
+    *   **Fix:** Resolved the issue where the user's name was locked from the start. The UI now allows the name to be edited until the first message is sent.
+    *   **Fix:** Corrected all CSS and HTML bugs that caused layout issues, restoring the single, centered chat window design.
+    *   **Feature:** Built the initial conversational UI with a default username.
+    *   **Core:** Established the base project structure, database schema, and initial FastAPI application.
+
+### 2.2. Core Architecture & Key Decisions
+
+*   **UI Assistant Tool Usage:** The `UIAssistantService` is now built on a two-step tool-calling loop. It first checks if the LLM needs to call a tool (like `search_internet`). If so, it executes the tool, feeds the results back to the LLM, and then gets the final JSON response for the user. This prevents factual hallucination.
+*   **Search Grounding:** We use Google Gemini with its native search grounding (`google_search=grounding.GoogleSearch()`) to ensure that when the AI uses its search tool, the results are factual and up-to-date.
+*   **Multi-Tenancy:** User identity (e.g., "APPU") is established on the frontend and passed to the backend with every API call. This is crucial for associating data (campaigns, tasks) with the correct user in the database.
+
+---
+## 3. Project Implementation Details
+
+### 3.1. Detailed File Structure & Status
+
+*   `config/app_config.py` **[Modified]** - Added `GOOGLE_API_KEY`.
+*   `config/prompt_config.py` **[Modified]** - Updated `UI_ASSISTANT_SYSTEM_PROMPT` to mandate the generic `search_internet` tool.
+*   `database/` - All files **[Created]** and stable.
+*   `llm_integrations/openai_form_client.py` **[Created]** - The client for the main OpenAI assistant.
+*   `llm_integrations/google_gemini_client.py` **[Created]** - The client for grounded internet searches.
+*   `task_manager/ui_assistant_svc.py` **[Modified]** - Now contains the tool-calling logic.
+*   `tools/information_retriever_svc.py` **[Created]** - Defines the `search_internet` function.
+*   `web_interface/` - All files for the UI **[Created]** and stable.
+*   `requirements.txt` **[Modified]** - Added `google-generativeai`.
+
+*   **[Planned]** `task_manager/orchestrator_svc.py` - Will receive the final plan and use function-calling to create database tasks.
+*   **[Planned]** `web_interface/routes_api.py` - Needs a new endpoint (`/api/execute_campaign`) to trigger the orchestrator.
+*   **[Planned]** All `call_processor_service/` files.
+*   **[Planned]** All `audio_processing_service/` files.
+*   **[Planned]** All `post_call_analyzer_service/` files.
+*   **[Planned]** All `campaign_summarizer_service/` files.
+
+---
+## 4. IMMEDIATE NEXT STEPS
+
+We have successfully completed Phase 1.5. The UI is stable, and the AI assistant is now equipped with a powerful and safe internet search tool.
+
+The next logical step is to implement **Phase 2: LLM Campaign Orchestration**. This involves making the "Confirm and Schedule Campaign" button functional.
+
+1.  **Create `task_manager/orchestrator_svc.py`:** This new service will be responsible for taking the final `campaign_plan` JSON from the UI and translating it into database entries. It will use an OpenAI client with a `schedule_call_batch` function definition.
+2.  **Update `routes_api.py`:** Add a new endpoint, likely `/api/execute_campaign`, that the frontend will call when the "Confirm and Schedule" button is clicked. This endpoint will invoke the new `OrchestratorService`.
+3.  **Update `main.js`:** Add a click event listener to the `#confirm-campaign-btn` that calls the new API endpoint.You are absolutely right to demand this. A "short" summary is the enemy of continuity. The purpose of this file is to be a complete, high-fidelity context dump, ensuring that no nuance is lost between sessions. My previous version was too concise.
+
+I have re-thought and re-architected the Wayforward.md file from the ground up to be the robust, self-sustaining document you need. This version is significantly more detailed, better structured, and explicitly designed for recursion and long-term use.
+
+This is the definitive version. Please use this as our new foundation.
+
+Wayforward.md
+OpenDeep - Master Project State & Forward Plan
+1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+
+This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+
+The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+
+RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+
+INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+
+PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+
+UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose. This is non-negotiable.
+
+INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+
+DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+2. PROJECT OVERVIEW & CURRENT STATE
+2.1. Version & Status
+
+Project Version: 3.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, and an analysis AI for outcomes.
+
+Current Development Phase: Phase 1.5 (Fixes & Search Tool) is complete. We are now ready to begin Phase 2 (LLM Campaign Orchestration).
+
+2.2. Changelog / Revision History
+
+v3.0 (Current Version):
+
+Meta: Re-architected this Wayforward.md file to be a comprehensive, self-sustaining context document. The structure is now more detailed to ensure no information loss between sessions.
+
+Meta: Explicitly defined the recursive "Update-Generate Loop" to ensure perfect context continuity for future AI instances.
+
+v2.0:
+
+Feature: Implemented a generic search_internet tool for the UI Assistant, powered by the Google Gemini API with search grounding. This replaced the restrictive search_for_business_info tool.
+
+Refactor: Updated task_manager/ui_assistant_svc.py to a more robust, two-step tool-calling loop.
+
+Refactor: Created tools/information_retriever_svc.py and llm_integrations/google_gemini_client.py to abstract the search functionality.
+
+Fix: Resolved a ModuleNotFoundError for google.generativeai by identifying the correct pip package (google-generativeai) and providing instructions to uninstall the incorrect google library.
+
+Fix: Corrected a NameError in web_interface/app.py by adding the necessary import statements for the new services.
+
+v1.0:
+
+Fix: Corrected all critical frontend bugs, including the non-functional "Submit Answers" button and the layout issues that displayed two screens at once.
+
+Feature: Implemented the editable-then-locked username functionality in the UI. The name defaults to "APPU", is editable before the first message, and becomes static text afterward.
+
+Feature: Built the foundational conversational UI with a single, centered chat window.
+
+Core: Established the base project structure, database schema (including multi-tenancy tables for users and campaigns), and the initial FastAPI application.
+
+2.3. Core Architecture & Key Decisions
+
+Tool-Augmented AI: The UIAssistantService is built on a mandatory, two-step tool-calling loop. It MUST first determine if a tool (e.g., search_internet) is needed to answer a user's request for factual information. If so, it executes the tool and feeds the results back to the LLM before generating the final JSON response for the user. This architecture is a non-negotiable safeguard against factual hallucination.
+
+Search Grounding: We use the Google Gemini Pro model (gemini-1.5-flash) via the official google-generativeai library, specifically configured with its native search grounding tool (grounding.GoogleSearch()). This ensures that when the search_internet tool is used, the results are grounded in real, up-to-date web data.
+
+Multi-Tenancy: The system is fundamentally multi-tenant. The UI establishes a username which is passed to the backend with every API call. The backend is responsible for using this username to fetch or create a user record in the database, ensuring all subsequent resources (campaigns, tasks) are correctly associated with that user.
+
+3. IMPLEMENTATION & FILE MANIFEST
+3.1. Required Libraries
+
+The requirements.txt file must contain: fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai.
+
+3.2. Detailed File Structure & Status
+
+config/app_config.py [Modified] - Contains all config, including DB, Redis, OpenAI, and now GOOGLE_API_KEY.
+
+config/prompt_config.py [Modified] - Defines the UI_ASSISTANT_SYSTEM_PROMPT which now mandates the use of the generic search_internet tool.
+
+database/schema.sql [Created] - Defines tables for users, campaigns, tasks, etc. Stable.
+
+database/models.py [Created] - Pydantic models reflecting the database schema. Stable.
+
+database/db_manager.py [Created] - Handles all database operations. Stable.
+
+llm_integrations/openai_form_client.py [Created] - Client for the main OpenAI assistant (GPT-4o).
+
+llm_integrations/google_gemini_client.py [Created] - Client for grounded internet searches via Gemini.
+
+task_manager/ui_assistant_svc.py [Modified] - Implements the main tool-calling loop for the chat interface.
+
+tools/information_retriever_svc.py [Created] - Service that defines the python function for the search_internet tool.
+
+web_interface/app.py [Modified] - FastAPI app that initializes and provides all services.
+
+web_interface/routes_api.py [Created] - Contains the /api/chat_interaction endpoint.
+
+web_interface/routes_ui.py [Created] - Serves the index.html template.
+
+web_interface/static/ - All CSS and JS files are [Created] and stable.
+
+web_interface/templates/index.html [Created] - The HTML for the chat UI. Stable.
+
+[Planned] task_manager/orchestrator_svc.py - Service to take the final plan JSON and create DB tasks.
+
+[Planned] call_processor_service/ - All files for initiating and managing Asterisk calls.
+
+[Planned] audio_processing_service/ - All files for handling real-time audio with OpenAI.
+
+[Planned] post_call_analyzer_service/ - All files for analyzing call outcomes.
+
+[Planned] campaign_summarizer_service/ - All files for generating final campaign reports.
+
+4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+
+We have successfully completed Phase 1.5. The UI is stable, and the AI assistant is now equipped with a powerful and safe internet search tool.
+
+The next concrete objective is to implement Phase 2: LLM Campaign Orchestration. This makes the "Confirm and Schedule Campaign" button functional.
+
+The plan is as follows:
+
+Create task_manager/orchestrator_svc.py:
+
+This new service will be responsible for taking the final campaign_plan JSON from the UI.
+
+It will use the OpenAIFormClient with a new ORCHESTRATOR_SYSTEM_PROMPT.
+
+It will define a schedule_call_batch function for the LLM to call.
+
+When the LLM calls the function, the service will execute db_manager.create_batch_of_tasks to persist the campaign.
+
+Update web_interface/routes_api.py:
+
+Add a new endpoint: POST /api/execute_campaign.
+
+This endpoint will receive the campaign_plan JSON and the username.
+
+It will use the db_manager to get the user's ID.
+
+It will then invoke the new OrchestratorService to process the plan and save it to the database.
+
+Update web_interface/static/js/main.js:
+
+Add a click event listener to the #confirm-campaign-btn.
+
+This listener will gather the campaign_plan data from the UI and send it to the new /api/execute_campaign endpoint.
+
+It will then display a confirmation message to the user in the chat window.

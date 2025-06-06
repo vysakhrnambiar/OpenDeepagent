@@ -3,13 +3,14 @@ from pathlib import Path
 import json
 from typing import Dict, Any, Optional, List
 
-# --- Path Hack for direct execution ---
+# --- Path Hack ---
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 # --- End Path Hack ---
 
 from llm_integrations.openai_form_client import OpenAIFormClient
+from tools.information_retriever_svc import InformationRetrieverService
 from config.prompt_config import UI_ASSISTANT_SYSTEM_PROMPT
 from common.logger_setup import setup_logger
 from config.app_config import app_config
@@ -17,136 +18,102 @@ from config.app_config import app_config
 logger = setup_logger(__name__, level_str=app_config.LOG_LEVEL)
 
 class UIAssistantService:
-    def __init__(self, openai_form_client: OpenAIFormClient):
-        if not isinstance(openai_form_client, OpenAIFormClient):
-            logger.error("openai_form_client provided to UIAssistantService is not an instance of OpenAIFormClient.")
-            raise TypeError("openai_form_client must be an instance of OpenAIFormClient")
+    def __init__(self, openai_form_client: OpenAIFormClient, retriever_service: InformationRetrieverService):
         self.openai_form_client = openai_form_client
-
-    async def get_next_chat_response(
-        self,
-        chat_history: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        Takes the current chat history, gets the next response from the LLM,
-        and returns it as a structured dictionary.
+        self.retriever_service = retriever_service
         
-        Args:
-            chat_history: A list of messages, e.g., [{"role": "user", "content": "..."}]
+        # Define the NEW generic tool structure for OpenAI
+        self.tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_internet",
+                    "description": "Searches the internet for factual, up-to-date information on any topic, such as businesses, products, or general knowledge.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "A clear and specific search query. For example: 'hospitals in Kacyiru Kigali phone numbers' or 'best budget smartphones 2024'.",
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+        
+        # Map the NEW tool name to the updated callable method
+        self.available_tools = {
+            "search_internet": self.retriever_service.search_internet,
+        }
 
-        Returns:
-            A dictionary representing the LLM's structured JSON response.
-        """
+    async def get_next_chat_response(self, chat_history: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not chat_history:
-            logger.warning("get_next_chat_response called with empty chat_history.")
             return {"status": "error", "message": "Chat history cannot be empty."}
 
-        # We don't need to build a complex user prompt string here.
-        # We'll pass the whole history to the LLM, which is better for context.
-        # The user's latest message should be the last one in the history.
-        logger.info(f"Processing chat history. Last user message: '{chat_history[-1]['content'][:100]}...'")
-
-        # The OpenAIFormClient's generate_json_completion is perfect for this.
-        # It handles the system prompt and expects a user prompt (or history).
-        # We can construct a simple string for the user_prompt arg or adapt the client.
-        # Let's adapt by passing the history directly.
+        messages_for_api = [{"role": "system", "content": UI_ASSISTANT_SYSTEM_PROMPT}]
+        messages_for_api.extend(chat_history)
 
         try:
-            # We'll create the message list to be sent to the API
-            messages_for_api = [
-                {"role": "system", "content": UI_ASSISTANT_SYSTEM_PROMPT}
-            ]
-            messages_for_api.extend(chat_history)
-
-            logger.debug(f"Sending to LLM with {len(messages_for_api)} total messages.")
-            
-            # Use the async_client directly for more control over messages
+            # First API call to see if a tool is needed
+            logger.debug("Making initial call to OpenAI to check for tool use...")
             response = await self.openai_form_client.async_client.chat.completions.create(
                 model=self.openai_form_client.default_model,
                 messages=messages_for_api,
-                temperature=0.2, # Lower temperature for more predictable JSON
-                response_format={"type": "json_object"}
+                tools=self.tools,
+                tool_choice="auto",
             )
+            response_message = response.choices[0].message
+
+            # Check if the model wants to call a tool
+            tool_calls = response_message.tool_calls
+            if tool_calls:
+                logger.info(f"OpenAI model requested to use a tool: {tool_calls[0].function.name}")
+                messages_for_api.append(response_message) # Append assistant's reply
+                
+                tool_call = tool_calls[0]
+                function_name = tool_call.function.name
+                function_to_call = self.available_tools[function_name]
+                function_args = json.loads(tool_call.function.arguments)
+                
+                # Execute the tool
+                function_response = await function_to_call(**function_args)
+                
+                # Append the tool's result to the conversation
+                messages_for_api.append(
+                    {
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": function_response,
+                    }
+                )
+                
+                # Second API call to get the final user-facing response
+                logger.debug("Making second call to OpenAI with tool results...")
+                second_response = await self.openai_form_client.async_client.chat.completions.create(
+                    model=self.openai_form_client.default_model,
+                    messages=messages_for_api,
+                    response_format={"type": "json_object"}
+                )
+                content_str = second_response.choices[0].message.content
             
-            content_str = response.choices[0].message.content
+            else:
+                # No tool call needed, it's a direct JSON response
+                logger.info("OpenAI responded directly without tool use.")
+                json_response = await self.openai_form_client.async_client.chat.completions.create(
+                    model=self.openai_form_client.default_model,
+                    messages=messages_for_api,
+                    response_format={"type": "json_object"}
+                )
+                content_str = json_response.choices[0].message.content
+
             if not content_str:
-                logger.warning("LLM returned empty content for JSON request.")
                 return {"status": "error", "message": "LLM returned an empty response."}
-
-            logger.debug(f"Received raw JSON from LLM: {content_str[:300]}...")
             
-            # The JSON parsing logic from our client can be used here
-            parsed_json = json.loads(content_str)
-            
-            # Basic validation of the returned structure
-            valid_stati = ["needs_more_info", "plan_complete", "clarifying"]
-            if "status" not in parsed_json or parsed_json["status"] not in valid_stati:
-                 raise ValueError("LLM response missing or has invalid 'status'.")
+            return json.loads(content_str)
 
-            return parsed_json
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from LLM response: {e}. Raw content: {content_str[:500]}")
-            return {"status": "error", "message": "LLM returned invalid JSON."}
         except Exception as e:
-            logger.error(f"An unexpected error occurred in UIAssistantService: {e}", exc_info=True)
-            return {"status": "error", "message": f"An unexpected server error occurred: {e}"}
-
-
-# --- Test Block ---
-async def main_test_ui_assistant_svc():
-    if not app_config.OPENAI_API_KEY:
-        print("Skipping UIAssistantService test: OPENAI_API_KEY not set.")
-        return
-
-    print("--- Testing UIAssistantService ---")
-    form_client = OpenAIFormClient()
-    ui_assistant = UIAssistantService(openai_form_client=form_client)
-
-    # Test Case 1: Vague initial goal
-    print("\n--- Test Case 1: Vague initial goal ---")
-    history_1 = [
-        {"role": "user", "content": "I want to invite my friends to a party."}
-    ]
-    print(f"User > {history_1[0]['content']}")
-    response_1 = await ui_assistant.get_next_chat_response(history_1)
-    print(f"Assistant >\n{json.dumps(response_1, indent=2)}")
-    if response_1.get("status") == "needs_more_info":
-        print("\nSUCCESS: Assistant correctly asked for more information.")
-    else:
-        print("\nFAILURE: Assistant did not ask for information as expected.")
-
-
-    # Test Case 2: Providing answers to the questions
-    print("\n--- Test Case 2: User provides answers ---")
-    # Simulate the history after user answers the assistant's first questions
-    answers_from_user = """
-    The friends are:
-    - Jhon 1: +919744554079
-    - Jhon 2: +919744554080
-    - Jhon 3: +919744554081
-
-    The party is on June 16th at 6 PM at my house in Kigali.
-    The dress code is white and white.
-    """
-    history_2 = [
-        {"role": "user", "content": "I want to invite my friends to a party."},
-        {"role": "assistant", "content": json.dumps(response_1)}, # The assistant's last turn
-        {"role": "user", "content": f"Here are the answers: {answers_from_user}"} # The user's new answers
-    ]
-    print(f"User > (Provides details for the party...)")
-    response_2 = await ui_assistant.get_next_chat_response(history_2)
-    print(f"Assistant >\n{json.dumps(response_2, indent=2)}")
-    if response_2.get("status") == "plan_complete":
-        print("\nSUCCESS: Assistant correctly generated the final campaign plan.")
-    elif response_2.get("status") == "needs_more_info":
-        print("\nINFO: Assistant is asking for more refinement, which is also a valid state.")
-    else:
-        print("\nFAILURE: Assistant failed to generate the final plan.")
-
-    await form_client.close_client()
-
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main_test_ui_assistant_svc())
+            logger.error(f"An error occurred in UIAssistantService: {e}", exc_info=True)
+            return {"status": "error", "message": f"An unexpected server error occurred."}

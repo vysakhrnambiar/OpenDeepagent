@@ -15,55 +15,52 @@ from fastapi.responses import RedirectResponse
 from web_interface import routes_ui, routes_api
 from database import db_manager
 from config.app_config import app_config
-
+from llm_integrations.google_gemini_client import GoogleGeminiClient
+from tools.information_retriever_svc import InformationRetrieverService
 # Import the services that the API routes will depend on
 from llm_integrations.openai_form_client import OpenAIFormClient
 from task_manager.ui_assistant_svc import UIAssistantService
 
 def create_app() -> FastAPI:
-    """Creates and configures the main FastAPI application instance."""
+    """Creates and aconfigures the main FastAPI application instance."""
     
-    # Initialize the database (creates tables if they don't exist)
     db_manager.initialize_database()
 
-    # Create singleton instances of our services
-    # These will be shared across all API requests, which is efficient.
     try:
+        # Initialize all clients first
         openai_client = OpenAIFormClient()
-        ui_assistant_service = UIAssistantService(openai_form_client=openai_client)
-        # In the future, the orchestrator service would also be created here.
+        gemini_client = GoogleGeminiClient() # New
+        
+        # Initialize services that depend on the clients
+        retriever_service = InformationRetrieverService(gemini_client=gemini_client) # New
+        ui_assistant_service = UIAssistantService(
+            openai_form_client=openai_client,
+            retriever_service=retriever_service # Pass the new service
+        )
+
     except Exception as e:
         print(f"CRITICAL: Failed to initialize services on startup: {e}")
-        # This will prevent the app from starting if essential config is missing, which is good.
         raise
 
-    # Create the FastAPI app
     app = FastAPI(
         title="OpenDeep AI Calling Platform",
         description="A platform to schedule, manage, and analyze AI-powered outbound calls.",
         version="1.0.0"
     )
 
-    # Make services available to the app state so routes can access them
-    # This is a simple way to handle dependencies.
     app.state.ui_assistant_service = ui_assistant_service
-    # app.state.orchestrator_service = orchestrator_service # For the future
 
-    # Mount the static files directory
     static_path = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
-    # Include the API and UI routers
     app.include_router(routes_api.router)
     app.include_router(routes_ui.router)
     
-    # Add a root redirect to the main UI page for convenience
     @app.get("/", include_in_schema=False)
     async def root_redirect():
         return RedirectResponse(url="/ui/")
 
     return app
-
 # --- Main application instance ---
 app = create_app()
 

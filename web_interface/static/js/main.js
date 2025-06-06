@@ -1,205 +1,207 @@
-document.addEventListener('DOMContentLoaded', function() {
-    const chatHistoryEl = document.getElementById('chat-history');
-    const chatInputEl = document.getElementById('chat-input');
-    const sendBtn = document.getElementById('send-btn');
-    const usernameEl = document.getElementById('username');
+document.addEventListener('DOMContentLoaded', () => {
+    let username = '';
+    let isUsernameLocked = false;
 
+    const chatContainer = document.getElementById('chat-container');
+    const chatHeaderTitle = document.getElementById('chat-header-title');
+    const chatForm = document.getElementById('chat-form');
+    const chatInput = document.getElementById('chat-input');
+    const chatBox = document.getElementById('chat-box');
+    const themeToggle = document.getElementById('theme-toggle');
+
+    if (!chatContainer || !chatForm) {
+        console.error("Chat UI elements not found!");
+        return;
+    }
+
+    // --- INITIAL SETUP ---
     let chatHistory = [];
-    let isWaitingForResponse = false;
+    
+    function initializeEditableUsername() {
+        chatHeaderTitle.innerHTML = 'AI Assistant for <input type="text" id="username-input" value="APPU" />';
+    }
+    initializeEditableUsername();
 
-    // --- Message Rendering Functions ---
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.body.className = savedTheme + '-theme';
 
-    function addMessageToHistory(role, content, isHtml = false) {
-        // This function is the single source of truth for adding messages.
-        // It adds to the internal state (chatHistory array) AND the UI.
-        chatHistory.push({ role: role, content: content });
+    chatForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        sendMessage();
+    });
 
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `chat-message ${role}`;
+    themeToggle.addEventListener('click', () => {
+        document.body.classList.toggle('dark-theme');
+        document.body.classList.toggle('light-theme');
+        localStorage.setItem('theme', document.body.className.split(' ')[0]);
+    });
+    
+    // --- CORE CHAT FUNCTIONS ---
+
+    function lockUsername() {
+        if (!isUsernameLocked) {
+            const usernameInputElement = document.getElementById('username-input');
+            // This check is the safety net.
+            if (usernameInputElement) {
+                username = usernameInputElement.value.trim() || 'User';
+                chatHeaderTitle.textContent = `AI Assistant for ${username}`;
+            }
+            isUsernameLocked = true;
+        }
+    }
+
+    function sendMessage() {
+        // --- THIS IS THE FIX ---
+        // Lock the username FIRST, before doing anything else.
+        lockUsername();
         
-        const bubbleDiv = document.createElement('div');
-        bubbleDiv.className = `message-bubble ${role}`;
-        
+        const messageText = chatInput.value.trim();
+        if (messageText === '') return;
+
+        const existingForm = document.getElementById('interactive-form-container');
+        if (existingForm) {
+            existingForm.remove();
+        }
+
+        // Now that the username is locked, this will display the correct name.
+        appendMessage('user', messageText);
+        chatHistory.push({ role: 'user', content: messageText });
+        chatInput.value = '';
+        sendMessageToApi();
+    }
+
+    function appendMessage(sender, text, isHtml = false) {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('chat-message', `${sender}-message`);
+
+        const senderElement = document.createElement('div');
+        senderElement.classList.add('sender-label');
+        senderElement.textContent = sender === 'user' ? username : 'AI Assistant';
+
+        const contentElement = document.createElement('div');
+        contentElement.classList.add('message-content');
         if (isHtml) {
-            bubbleDiv.innerHTML = content;
+            contentElement.innerHTML = text;
         } else {
-            // Sanitize plain text content to prevent XSS by setting it as text, not HTML
-            bubbleDiv.innerText = content;
+            contentElement.textContent = text;
         }
-        
-        messageDiv.appendChild(bubbleDiv);
-        chatHistoryEl.appendChild(messageDiv);
-        scrollToBottom();
+
+        messageElement.appendChild(senderElement);
+        messageElement.appendChild(contentElement);
+        chatBox.appendChild(messageElement);
+        chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    function renderAssistantResponse(response) {
-        // Add the structured JSON response to our internal history for context later
-        chatHistory.push({ role: 'assistant', content: JSON.stringify(response) });
-
-        if (response.status === 'clarifying') {
-            // Display the assistant's text response as a new message bubble
-            addMessageToHistory('assistant', response.assistant_response);
-        
-        } else if (response.status === 'needs_more_info') {
-            const formHtml = createInteractiveForm(response.questions);
-            addMessageToHistory('assistant', formHtml, true);
-            const form = chatHistoryEl.querySelector('form:last-of-type');
-            if(form) form.addEventListener('submit', handleFormSubmit);
-
-        } else if (response.status === 'plan_complete') {
-            const planHtml = createFinalPlanDisplay(response.campaign_plan);
-            addMessageToHistory('assistant', planHtml, true);
-            const confirmBtn = document.getElementById('confirm-campaign-btn');
-            if(confirmBtn) confirmBtn.addEventListener('click', handleConfirmCampaign);
-        } else {
-            addMessageToHistory('assistant', `I seem to have encountered an unexpected issue. Status: ${response.status || 'unknown'}`);
-        }
-    }
-
-    function createInteractiveForm(questions) {
-        let formHtml = `<form class="interactive-form"><p>I need a bit more information to continue planning:</p>`;
-        questions.forEach(q => {
-            formHtml += `<div class="form-group">
-                           <label for="${q.field_name}">${q.question_text}</label>`;
-            if (q.response_type === 'textarea') {
-                formHtml += `<textarea id="${q.field_name}" name="${q.field_name}"></textarea>`;
-            } else {
-                const inputType = q.response_type === 'datetimepicker' ? 'datetime-local' : 'text';
-                formHtml += `<input type="${inputType}" id="${q.field_name}" name="${q.field_name}">`;
-            }
-            formHtml += `</div>`;
-        });
-        formHtml += `<button type="submit">Submit Answers</button></form>`;
-        return formHtml;
-    }
-
-    function createFinalPlanDisplay(plan) {
-        const sanitizedPrompt = escapeHtml(plan.master_agent_prompt);
-        const sanitizedContacts = escapeHtml(JSON.stringify(plan.contacts, null, 2));
-
-        return `<div class="final-plan">
-                    <h3>Campaign Plan Ready!</h3>
-                    <p>Here is the final plan based on our conversation. Please review it.</p>
-                    <strong>Agent Instructions:</strong>
-                    <pre>${sanitizedPrompt}</pre>
-                    <strong>Contacts to Call:</strong>
-                    <pre>${sanitizedContacts}</pre>
-                    <button id="confirm-campaign-btn">Confirm and Schedule Campaign</button>
-                </div>`;
-    }
-
-    // --- Event Handlers ---
-
-    async function handleSend() {
-        const userInput = chatInputEl.value.trim();
-        if (!userInput || isWaitingForResponse) return;
-
-        addMessageToHistory('user', userInput); // This now adds to UI and history array
-        chatInputEl.value = '';
-        await getAssistantResponse();
-    }
-    
-    async function handleFormSubmit(event) {
-        event.preventDefault();
-        const formData = new FormData(event.target);
-        let userResponseText = "Here are the details you asked for:\n";
-        for (const [key, value] of formData.entries()) {
-            if (value) {
-                userResponseText += `- ${key.replace(/_/g, ' ')}: ${value}\n`;
-            }
-        }
-        
-        // Disable the form that was just submitted to prevent re-clicks
-        event.target.querySelectorAll('input, textarea, button').forEach(el => el.disabled = true);
-
-        // Treat the submitted form data as a new user message turn
-        addMessageToHistory('user', userResponseText);
-        await getAssistantResponse();
-    }
-    
-    function handleConfirmCampaign(event) {
-        addMessageToHistory('assistant', "Great! Campaign scheduling will be implemented in the next phase. For now, this step is confirmed.");
-        
-        // Disable the confirmation button after it's clicked
-        const confirmBtn = event.target;
-        confirmBtn.innerText = "Confirmed!";
-        confirmBtn.disabled = true;
-    }
-
-
-    // --- API Call & UI State ---
-
-    async function getAssistantResponse() {
-        if (isWaitingForResponse) return;
-
-        isWaitingForResponse = true;
-        showSpinner();
+    async function sendMessageToApi() {
+        const loadingIndicator = document.createElement('div');
+        loadingIndicator.id = 'loading-indicator';
+        loadingIndicator.classList.add('chat-message', 'assistant-message');
+        loadingIndicator.innerHTML = '<div class="message-content"><div class="typing-indicator"></div></div>';
+        chatBox.appendChild(loadingIndicator);
+        chatBox.scrollTop = chatBox.scrollHeight;
 
         try {
             const response = await fetch('/api/chat_interaction', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: usernameEl.value.trim() || 'default_user',
-                    chat_history: chatHistory
-                })
+                body: JSON.stringify({ chat_history: chatHistory, username: username }),
             });
-
-            hideSpinner();
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'API request failed');
-            }
-
             const data = await response.json();
-            renderAssistantResponse(data);
+            chatHistory.push({ role: 'assistant', content: JSON.stringify(data) });
+            renderAssistantMessage(data);
 
         } catch (error) {
-            hideSpinner();
-            addMessageToHistory('assistant', `Sorry, an error occurred: ${error.message}`);
-        } finally {
-            isWaitingForResponse = false;
+            console.error('Error:', error);
+            const loading = document.getElementById('loading-indicator');
+            if (loading) loading.remove();
+            appendMessage('assistant', 'Sorry, I couldn\'t connect to the server.');
+        }
+    }
+    
+    // <editor-fold desc="Rendering and Form Handling Helpers">
+    function renderAssistantMessage(response) {
+        const loading = document.getElementById('loading-indicator');
+        if (loading) loading.remove();
+
+        switch (response.status) {
+            case 'clarifying':
+                appendMessage('assistant', response.assistant_response);
+                break;
+            case 'needs_more_info':
+                renderInteractiveForm(response.questions);
+                break;
+            case 'plan_complete':
+                renderCampaignPlan(response.campaign_plan);
+                break;
+            case 'error':
+                appendMessage('assistant', `Error: ${response.message}`);
+                break;
+            default:
+                appendMessage('assistant', 'Sorry, I received an unexpected response format.');
         }
     }
 
-    function showSpinner() {
-        const spinnerDiv = document.createElement('div');
-        spinnerDiv.className = 'chat-message assistant';
-        spinnerDiv.innerHTML = `<div class="message-bubble assistant"><div class="spinner"></div></div>`;
-        spinnerDiv.id = 'thinking-spinner';
-        chatHistoryEl.appendChild(spinnerDiv);
-        scrollToBottom();
-    }
+    function renderInteractiveForm(questions) {
+        let formHtml = `<form id="interactive-form-container" class="interactive-form">`;
+        questions.forEach(q => {
+            formHtml += `<div class="form-group"><label for="${q.field_name}">${q.question_text}</label>`;
+            if (q.response_type === 'textarea') {
+                formHtml += `<textarea id="${q.field_name}" name="${q.field_name}" rows="3"></textarea>`;
+            } else {
+                formHtml += `<input type="text" id="${q.field_name}" name="${q.field_name}">`;
+            }
+            formHtml += `</div>`;
+        });
+        formHtml += `<button type="submit">Submit Answers</button></form>`;
 
-    function hideSpinner() {
-        const spinnerDiv = document.getElementById('thinking-spinner');
-        if (spinnerDiv) spinnerDiv.remove();
-    }
-    
-    function scrollToBottom() {
-        chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
-    }
-    
-    function escapeHtml(unsafe) {
-        if (typeof unsafe !== 'string') return '';
-        return unsafe
-             .replace(/&/g, "&amp;")
-             .replace(/</g, "&lt;")
-             .replace(/>/g, "&gt;")
-             .replace(/"/g, "&quot;")
-             .replace(/'/g, "&#39;");
-    }
+        appendMessage('assistant', formHtml, true);
 
-    // --- Initial Setup ---
-    sendBtn.addEventListener('click', handleSend);
-    chatInputEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
+        const interactiveForm = document.getElementById('interactive-form-container');
+        if (interactiveForm) {
+            interactiveForm.addEventListener('submit', handleFormSubmission);
         }
-    });
-    
-    // Initial greeting
-    addMessageToHistory('assistant', 'Hello! I am your campaign assistant. How can I help you today?');
+    }
+
+    function renderCampaignPlan(plan) {
+        const planHtml = `
+            <div class="campaign-plan">
+                <h4>Campaign Plan Ready!</h4>
+                <p><strong>Master Prompt:</strong></p>
+                <pre>${plan.master_agent_prompt}</pre>
+                <p><strong>Contacts:</strong></p>
+                <ul>
+                    ${plan.contacts.map(c => `<li>${c.name} (${c.phone})</li>`).join('')}
+                </ul>
+                <button id="confirm-campaign-btn">Confirm and Schedule Campaign</button>
+            </div>
+        `;
+        appendMessage('assistant', planHtml, true);
+    }
+
+    function handleFormSubmission(event) {
+        event.preventDefault();
+        lockUsername(); // Also lock the username if a form is submitted first.
+        const form = event.target;
+        if (!form) return;
+
+        const formData = new FormData(form);
+        let userMessageContent = "Here are the details you asked for:\n\n";
+        let hasData = false;
+
+        for (const [name, value] of formData.entries()) {
+            if (value.trim() !== "") {
+                const label = name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                userMessageContent += `**${label}:** ${value}\n`;
+                hasData = true;
+            }
+        }
+
+        if (!hasData) return;
+
+        appendMessage('user', userMessageContent);
+        chatHistory.push({ role: 'user', content: userMessageContent });
+        sendMessageToApi();
+        form.remove();
+    }
+    // </editor-fold>
 });
