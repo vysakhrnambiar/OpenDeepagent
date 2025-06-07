@@ -883,3 +883,160 @@ Add a click event listener to the #confirm-campaign-btn.
 This listener will gather the campaign_plan data from the UI and send it to the new /api/execute_campaign endpoint.
 
 It will then display a confirmation message to the user in the chat window.
+
+
+#####################################################################################################################
+Of course. I have reviewed the entire history of our conversation since the last update, and I will now generate the next complete entry for our Wayforward.md.
+
+This update captures the extensive debugging of the Google Places API, the architectural decision to use the modern API, the enhancement of the system prompt with a feedback loop, and the addition of a code-level validation safety net.
+
+Here is the new, complete file.
+
+OpenDeep - Master Project State & Forward Plan
+1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+
+This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+
+The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+
+RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+
+INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+
+PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+
+UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new.
+
+INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+
+DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+2. PROJECT OVERVIEW & CURRENT STATE
+2.1. Version & Status
+
+Project Version: 5.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, and an analysis AI for outcomes.
+
+Current Development Phase: Phase 1.6 (Authoritative Business Search & API Integration) is complete. We have successfully resolved the data sourcing issues. We are now ready to resume our original plan and begin Phase 2: LLM Campaign Orchestration.
+
+2.2. Changelog / Revision History
+
+v5.0 (Current Version):
+
+Fix: Resolved persistent 403 Forbidden errors from the Google Cloud APIs.
+
+Fix: Identified the root cause of the 403 errors: the GOOGLE_API_KEY was being used in a project where the "Places API (New)" was not enabled. The solution was to consolidate all work into a single Google Cloud project and generate a new key from it.
+
+Upgrade: Upgraded the codebase from the legacy googlemaps library to use the modern Places API (New) via direct HTTP requests. This is a more future-proof and recommended approach.
+
+Enhancement: Made the UI_ASSISTANT_SYSTEM_PROMPT more robust by adding a "Feedback Loop" instruction, allowing the AI to revert to an earlier stage if the user provides corrections on a finalized plan.
+
+Enhancement: Implemented a code-level validation check (_is_plan_valid) in UIAssistantService as a safety net to programmatically reject any generated plans that contain missing or invalid phone numbers.
+
+v4.0:
+
+Feature: Implemented a new, specialized tool, get_authoritative_business_info, to get reliable data for businesses using the Google Places API.
+
+Refactor: Updated the UIAssistantService to support multiple, distinct tools and updated the system prompt to guide the AI's tool selection.
+
+Dependency: Added googlemaps library for Places API access (later replaced).
+
+v3.0:
+
+Meta: Re-architected this Wayforward.md file to be a comprehensive, self-sustaining context document.
+
+v2.0 & v1.0:
+
+Initial UI bug fixes, implementation of search tools, and creation of the foundational project structure.
+
+2.3. Core Architecture & Key Decisions
+
+Modern API First: We have made a deliberate decision to use the modern "Places API (New)" instead of the legacy version. This requires making direct HTTP requests but ensures long-term compatibility and access to the latest features.
+
+Dual-Layer Validation: To prevent invalid campaign plans (e.g., with missing phone numbers), we have implemented a two-layer defense system:
+
+Prompt-Level Instruction: The UI_ASSISTANT_SYSTEM_PROMPT now explicitly forbids the AI from generating a plan with invalid data.
+
+Code-Level Enforcement: The UIAssistantService contains a validation method (_is_plan_valid) that programmatically inspects the AI's output and forces a retry if the plan is invalid. This acts as a crucial safety net.
+
+Tool-Augmented AI & Specialization: The UI Assistant has a "toolbox" with multiple tools. It is strictly instructed to use the specialized get_authoritative_business_info for business data and the general search_internet for all other queries. This separation ensures data reliability.
+
+3. IMPLEMENTATION & FILE MANIFEST
+3.1. Required Libraries
+
+The requirements.txt file must contain: fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, requests. (Note: googlemaps has been removed).
+
+3.2. Detailed File Structure & Status
+
+config/prompt_config.py [Modified] - Contains the final, robust system prompt with stage-based logic, strict tool usage rules, and the new feedback loop instruction.
+
+llm_integrations/google_gemini_client.py [Modified] - Rewritten to remove the googlemaps library and use the requests library to call the modern "Places API (New)" endpoint directly.
+
+task_manager/ui_assistant_svc.py [Modified] - Implements the _is_plan_valid safety-net function to reject invalid plans from the AI before they reach the user.
+
+requirements.txt [Modified] - googlemaps removed, requests added.
+
+All other core files for the UI, database, and basic services are [Created] and stable.
+
+[Planned] task_manager/orchestrator_svc.py - Service to take the final plan JSON and create DB tasks.
+
+[Planned] web_interface/routes_api.py - Needs a new endpoint (/api/execute_campaign).
+
+[Planned] web_interface/static/js/main.js - Needs a click handler for the confirmation button.
+
+[Planned] All call_processor_service/ files.
+
+[Planned] All audio_processing_service/ files.
+
+[Planned] All post_call_analyzer_service/ files.
+
+[Planned] All campaign_summarizer_service/ files.
+
+4. IMMEDIATE NEXT STEPS
+
+The significant detour to fix our data sourcing and improve reliability is now complete. We can now confidently return to our original plan.
+
+The next concrete objective is to implement Phase 2: LLM Campaign Orchestration. This makes the "Confirm and Schedule Campaign" button functional.
+
+The plan is as follows:
+
+Create task_manager/orchestrator_svc.py:
+
+This new service will be responsible for taking the final campaign_plan JSON from the UI.
+
+It will use the OpenAIFormClient with a new ORCHESTRATOR_SYSTEM_PROMPT.
+
+It will define a schedule_call_batch function for the LLM to call. When the LLM calls the function, the service will execute db_manager.create_batch_of_tasks to persist the campaign.
+
+Update web_interface/routes_api.py:
+
+Add a new endpoint: POST /api/execute_campaign.
+
+This endpoint will receive the campaign_plan JSON and the username.
+
+It will use the db_manager to get the user's ID.
+
+It will then invoke the new OrchestratorService to process the plan and save it to the database.
+
+Update web_interface/static/js/main.js:
+
+Add a click event listener to the #confirm-campaign-btn.
+
+This listener will gather the campaign_plan data from the UI and send it to the new /api/execute_campaign endpoint.
+
+It will then display a confirmation message to the user in the chat window.
