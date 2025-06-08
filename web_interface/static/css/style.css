@@ -1,275 +1,267 @@
-/* General Body and Theme Styling */
-:root {
-    --bg-dark: #1e1e1e;
-    --surface-dark: #2d2d2d;
-    --text-dark: #e0e0e0;
-    --primary-dark: #4a90e2;
-    --border-dark: #444;
-
-    --bg-light: #f5f5f5;
-    --surface-light: #ffffff;
-    --text-light: #212121;
-    --primary-light: #1976d2;
-    --border-light: #ccc;
+/* General body and theme setup */
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px; /* Add some padding to the body */
+    background-color: var(--background-color);
+    color: var(--text-color);
+    transition: background-color 0.3s, color 0.3s;
+    display: flex; /* For centering app-container */
+    justify-content: center; /* For centering app-container */
+    align-items: flex-start; /* Align to top, padding will handle space */
+    min-height: 100vh;
 }
 
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    margin: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    transition: background-color 0.3s, color 0.3s;
+:root {
+    --background-color: #f4f7f6; /* Light gray background */
+    --text-color: #333;
+    --container-bg: #ffffff; /* White container */
+    --header-bg: #e9ecef;   /* Light gray header */
+    --input-bg: #ffffff;    /* White input fields */
+    --button-bg: #007bff;   /* Blue buttons */
+    --button-text: #ffffff;
+    --user-message-bg: #007bff; /* Blue for user messages */
+    --user-message-text: #ffffff;
+    --assistant-message-bg: #e9ecef; /* Gray for assistant messages */
+    --assistant-message-text: #333333;
+    --border-color: #dddddd;
+    --shadow-color: rgba(0, 0, 0, 0.1);
 }
 
 body.dark-theme {
-    background-color: var(--bg-dark);
-    color: var(--text-dark);
+    --background-color: #121212; /* Very dark gray */
+    --text-color: #e0e0e0;
+    --container-bg: #1e1e1e; /* Dark gray container */
+    --header-bg: #2c2c2c;   /* Slightly lighter dark gray for header */
+    --input-bg: #252525;    /* Dark input fields */
+    --button-bg: #0056b3;   /* Darker blue for buttons */
+    --button-text: #e0e0e0;
+    --user-message-bg: #0056b3; /* Darker blue for user messages */
+    --user-message-text: #e0e0e0;
+    --assistant-message-bg: #333333; /* Dark gray for assistant messages */
+    --assistant-message-text: #e0e0e0;
+    --border-color: #444444;
+    --shadow-color: rgba(255, 255, 255, 0.05);
 }
 
-body.light-theme {
-    background-color: var(--bg-light);
-    color: var(--text-light);
-}
-
-.hidden { display: none; }
-
-
-/* Chat Container Styling */
-.chat-container {
-    display: flex;
-    flex-direction: column;
-    width: 800px;
-    max-width: 95vw;
-    height: 90vh;
+.app-container {
+    width: 100%;
+    max-width: 650px; /* Max width of the chat app */
+    background-color: var(--container-bg);
     border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-}
-body.dark-theme .chat-container {
-    background-color: var(--surface-dark);
-}
-body.light-theme .chat-container {
-    background-color: var(--surface-light);
+    box-shadow: 0 4px 15px var(--shadow-color);
+    display: flex;
+    flex-direction: column; 
+    /* Let height be determined by content, or set a max-height */
+    /* max-height: 90vh; /* Optional: if you want to limit height and make app-container scrollable */
 }
 
-.chat-header {
+.app-header {
+    background-color: var(--header-bg);
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border-color);
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 15px 20px;
-    border-bottom: 1px solid var(--border-light);
-}
-body.dark-theme .chat-header {
-    border-bottom-color: var(--border-dark);
 }
 
-/* --- NEW STYLES for editable username --- */
-#chat-header-title {
-    font-size: 1.2em; /* Keep h1 size */
-    font-weight: bold;
+.app-header h1 {
     margin: 0;
+    font-size: 1.4em; /* Slightly smaller h1 */
+    color: var(--text-color);
 }
-#username-input {
-    background: transparent;
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Adds space between username elements */
+}
+
+#username-display {
+    font-weight: bold;
+    color: var(--text-color);
+}
+
+.username-input {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    font-size: 0.9em;
+    width: 120px; /* Fixed width for username input */
+}
+
+.edit-username-button, 
+#toggle-theme-btn {
+    padding: 6px 12px;
     border: none;
-    border-bottom: 2px dotted var(--border-light);
-    color: inherit; /* Use the theme's text color */
-    font-size: inherit;
-    font-weight: inherit;
-    padding: 2px 5px;
-    width: 150px;
-    transition: border-color 0.2s;
-}
-body.dark-theme #username-input {
-    border-bottom-color: var(--border-dark);
-}
-#username-input:focus {
-    outline: none;
-    border-bottom-color: var(--primary-light);
-}
-body.dark-theme #username-input:focus {
-    border-bottom-color: var(--primary-dark);
+    border-radius: 4px;
+    background-color: var(--button-bg);
+    color: var(--button-text);
+    cursor: pointer;
+    font-size: 0.9em;
 }
 
+.edit-username-button:hover, 
+#toggle-theme-btn:hover {
+    opacity: 0.9;
+}
 
-.chat-box {
-    flex-grow: 1;
-    overflow-y: auto;
-    padding: 20px;
+#chat-container {
     display: flex;
-    flex-direction: column;
+    flex-direction: column; /* Chat window above, form below */
+    flex-grow: 1; /* Takes remaining space in app-container */
+    padding: 15px; /* Padding inside the chat area */
+    /* If app-container has max-height, chat-container might need overflow:hidden */
 }
 
-.chat-input-area {
-    padding: 15px 20px;
-    border-top: 1px solid var(--border-light);
+#chat-window {
+    flex-grow: 1; /* Chat messages area takes up available space */
+    overflow-y: auto; /* Scroll for messages */
+    margin-bottom: 15px; /* Space between messages and input form */
+    padding-right: 5px; /* Small padding for scrollbar */
+    min-height: 300px; /* Ensure chat window has some height */
 }
-body.dark-theme .chat-input-area {
-    border-top-color: var(--border-dark);
+
+#message-form {
+    display: flex; /* Input and button side-by-side */
+    border-top: 1px solid var(--border-color);
+    padding-top: 15px;
 }
-.chat-form {
-    display: flex;
-}
-#chat-input {
-    flex-grow: 1;
-    padding: 10px;
-    border: 1px solid var(--border-light);
+
+#message-input {
+    flex-grow: 1; /* Input takes most of the space */
+    padding: 12px; /* More padding */
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-right: 10px;
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    font-size: 1em;
 }
-body.dark-theme #chat-input {
-    background-color: #3c3c3c;
-    border-color: #555;
-    color: var(--text-dark);
-}
-.chat-form button {
-    padding: 10px 20px;
+
+#message-form button {
+    padding: 12px 18px; /* More padding */
     border: none;
     border-radius: 4px;
+    background-color: var(--button-bg);
+    color: var(--button-text);
     cursor: pointer;
-    background-color: var(--primary-light);
-    color: white;
-}
-body.dark-theme .chat-form button {
-    background-color: var(--primary-dark);
+    font-size: 1em;
 }
 
-/* Message Styling */
-.chat-message {
-    margin-bottom: 15px;
-    max-width: 80%;
-    display: flex;
-    flex-direction: column;
+#message-form button:hover {
+    opacity: 0.9;
 }
-.sender-label {
-    font-size: 0.8em;
-    font-weight: bold;
-    margin-bottom: 4px;
-    color: #555;
-}
-body.dark-theme .sender-label {
-    color: #a0a0a0;
-}
-.message-content {
+
+.message {
+    margin-bottom: 12px;
     padding: 10px 15px;
-    border-radius: 12px;
-    line-height: 1.5;
-}
-.user-message {
-    align-self: flex-end;
-}
-.user-message .message-content {
-    background-color: var(--primary-light);
-    color: white;
-    border-bottom-right-radius: 2px;
-}
-body.dark-theme .user-message .message-content {
-    background-color: var(--primary-dark);
-}
-.assistant-message {
-    align-self: flex-start;
-}
-.assistant-message .message-content {
-    background-color: #f0f0f0;
-    border-bottom-left-radius: 2px;
-}
-body.dark-theme .assistant-message .message-content {
-    background-color: #3c3c3c;
+    border-radius: 18px; /* Rounded messages */
+    max-width: 80%; /* Messages don't span full width */
+    word-wrap: break-word;
+    line-height: 1.4;
 }
 
-/* Interactive Form Styling */
-.interactive-form {
-    background-color: rgba(0,0,0,0.05);
+.user-message {
+    background-color: var(--user-message-bg);
+    color: var(--user-message-text);
+    margin-left: auto; /* Align user messages to the right */
+    border-bottom-right-radius: 5px; /* Slightly different shape */
+}
+
+.assistant-message {
+    background-color: var(--assistant-message-bg);
+    color: var(--assistant-message-text);
+    margin-right: auto; /* Align assistant messages to the left */
+    border-bottom-left-radius: 5px; /* Slightly different shape */
+}
+
+.assistant-message.thinking {
+    font-style: italic;
+    color: #888; 
+}
+body.dark-theme .assistant-message.thinking {
+    color: #aaa;
+}
+
+/* Form styles for dynamic questions */
+#dynamic-info-form {
+    background-color: var(--assistant-message-bg); /* Match assistant message or slightly different */
     padding: 15px;
-    border-radius: 8px;
+    border-radius: 8px; /* Consistent rounding */
+    margin-top: 10px; 
+    border: 1px solid var(--border-color);
+}
+
+#dynamic-info-form .form-group {
+    margin-bottom: 15px;
+}
+
+#dynamic-info-form label {
+    display: block;
+    margin-bottom: 6px; /* More space */
+    font-weight: bold;
+    color: var(--text-color);
+}
+
+#dynamic-info-form input[type="text"],
+#dynamic-info-form textarea,
+#dynamic-info-form select {
+    width: calc(100% - 22px); 
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    font-size: 0.95em;
+}
+
+#dynamic-info-form textarea {
+    min-height: 60px;
+    resize: vertical;
+}
+
+#dynamic-info-form .form-submit-btn {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    background-color: var(--button-bg);
+    color: var(--button-text);
+    cursor: pointer;
+    font-size: 1em;
+    display: inline-block; /* Allow it to sit with other elements if needed */
     margin-top: 10px;
 }
-body.dark-theme .interactive-form {
-    background-color: rgba(255,255,255,0.05);
+#dynamic-info-form .form-submit-btn:hover {
+    opacity: 0.9;
 }
-.form-group {
-    margin-bottom: 15px;
+
+.hidden {
+    display: none !important;
 }
-.form-group label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
-}
-.interactive-form input,
-.interactive-form textarea {
-    width: 95%;
-    padding: 8px;
-    border-radius: 4px;
-    border: 1px solid var(--border-light);
-}
-body.dark-theme .interactive-form input,
-body.dark-theme .interactive-form textarea {
-     background-color: #2d2d2d;
-     border-color: #555;
-     color: var(--text-dark);
-}
-.interactive-form button {
-    padding: 8px 15px;
+
+.confirm-campaign-button {
+    /* Styles for the confirm button */
+    padding: 12px 20px;
     border: none;
-    border-radius: 4px;
-    background-color: var(--primary-light);
+    border-radius: 5px;
+    background-color: #28a745; /* Green color */
     color: white;
+    font-size: 1.1em;
+    font-weight: bold;
     cursor: pointer;
+    text-align: center;
+    margin: 15px auto; /* Centered below chat container */
+    display: block; /* Make it block to center with margin: auto */
+    width: fit-content; /* Adjust width to content + padding */
 }
-body.dark-theme .interactive-form button {
-    background-color: var(--primary-dark);
+.confirm-campaign-button:hover {
+    background-color: #218838;
 }
-
-/* Typing Indicator */
-.typing-indicator {
-    display: inline-block;
-    width: 40px;
-    height: 20px;
-    position: relative;
-}
-.typing-indicator::before,
-.typing-indicator::after {
-    content: '';
-    position: absolute;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: #888;
-    animation: typing 1.5s infinite;
-}
-.typing-indicator::before {
-    left: 0;
-    animation-delay: 0s;
-}
-.typing-indicator::after {
-    left: 12px;
-    animation-delay: 0.3s;
-}
-.typing-indicator span {
-    position: absolute;
-    left: 24px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: #888;
-    animation: typing 1.5s infinite;
-    animation-delay: 0.6s;
-}
-@keyframes typing {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-5px); }
-}
-
-/* Plan Display Styling */
-.campaign-plan pre {
-    background-color: rgba(0,0,0,0.1);
-    padding: 10px;
-    border-radius: 4px;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-}
-body.dark-theme .campaign-plan pre {
-     background-color: rgba(0,0,0,0.2);
+.confirm-campaign-button.hidden {
+    display: none !important;
 }

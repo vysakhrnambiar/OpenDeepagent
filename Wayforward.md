@@ -1040,3 +1040,202 @@ Add a click event listener to the #confirm-campaign-btn.
 This listener will gather the campaign_plan data from the UI and send it to the new /api/execute_campaign endpoint.
 
 It will then display a confirmation message to the user in the chat window.
+
+Okay, I understand the plan. I will now generate the complete Wayforward.md file. Please copy the entire content of my next message, as that will be the new master document.
+
+OpenDeep - Master Project State & Forward Plan
+
+1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+
+This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+
+The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+
+RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+
+INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+
+PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+
+UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
+
+INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+
+DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+2. PROJECT OVERVIEW & CURRENT STATE
+
+2.1. Version & Status
+
+Project Version: 6.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, and an analysis AI for outcomes, with capabilities for Human-in-the-Loop (HITL) feedback.
+
+Current Development Phase:
+
+Phase 1 (UI Foundation): Complete.
+
+Phase 1.5 (Fixes & Search Tool): Complete.
+
+Phase 1.6 (Authoritative Business Search & API Integration): Complete.
+
+Phase 2a (LLM Campaign Orchestration - UI Button & Backend Service): Complete.
+
+Next: Phase 2b (Task Execution Engine - Task Scheduler Service).
+
+2.2. Changelog / Revision History
+
+v6.0 (Current Version):
+
+Feature Complete (Phase 2a): Successfully implemented the OrchestratorService (task_manager/orchestrator_svc.py) and the /api/execute_campaign endpoint in web_interface/routes_api.py. The "Confirm and Schedule Campaign" button in the UI now successfully triggers the creation of campaign and task records in the database.
+
+Fix: Resolved TypeError: UIAssistantService.__init__() got an unexpected keyword argument 'username' by updating UIAssistantService to correctly accept and store the username.
+
+Fix: Resolved AttributeError: 'OpenAIFormClient' object has no attribute 'generate_json_completion_with_tools' by implementing the generate_json_completion_with_tools method in llm_integrations/openai_form_client.py.
+
+Fix: Resolved NameError: name 'asyncio' is not defined in openai_form_client.py by adding the import asyncio statement.
+
+Fix: Resolved AttributeError: 'GoogleGeminiClient' object has no attribute 'find_place_via_sdk' by correcting tools/information_retriever_svc.py's get_authoritative_business_info function to use direct HTTP calls to the Google Places API (New) instead of a non-existent SDK method. Ensured httpx is used for these calls.
+
+Fix: Corrected the return type handling in OrchestratorService.execute_plan to properly interpret the JSON string response from the _schedule_call_batch tool, ensuring the UI receives a correct success/error message.
+
+Architecture: Detailed planning for the Human-in-the-Loop (HITL) feedback mechanism, outlining its components, lifecycle, and integration as a new phase in the project plan.
+
+Architecture: Clarified the distinct roles of the Orchestrator (one-time setup), Scheduler (persistent execution engine), and Post-Call Analyzer (decision-making for retries/next steps).
+
+Future Vision: Noted the long-term plan for richer user profiles to enhance AI contextual awareness and reduce redundant questioning.
+
+v5.0:
+
+Resolved Google Cloud API 403 errors by consolidating to a single project and using the "Places API (New)".
+
+Upgraded to direct HTTP requests for Places API (New).
+
+Enhanced UI_ASSISTANT_SYSTEM_PROMPT with a feedback loop.
+
+Added code-level validation (_is_plan_valid) in UIAssistantService.
+
+v4.0 - v1.0:
+
+Initial UI bug fixes, implementation of general and business search tools, multi-tool support, and creation of the foundational project structure, database schema (including multi-tenancy), and FastAPI application. Resolved various import and UI layout issues.
+
+2.3. Core Architecture & Key Decisions
+
+Separation of Concerns (Orchestrator, Scheduler, Analyzer):
+
+Orchestrator (OrchestratorService): A one-time setup agent. Takes the UI's final campaign_plan and uses an LLM with a specific tool (schedule_call_batch) to intelligently create campaign and a batch of task records in the database. Its job is then done for that specific plan.
+
+Scheduler (TaskSchedulerService): A persistent, long-running background process. Polls the tasks table for due items (based on next_action_time and attempt counts). Initiates call attempts by triggering the CallInitiatorService.
+
+Post-Call Analyzer (AnalysisService): A decision-making agent. After a call attempt, it analyzes the outcome (transcript, call status). It updates the parent task with success, failure, or sets a new next_action_time for a retry, which the Scheduler then picks up.
+
+Human-in-the-Loop (HITL) Feedback: A planned critical feature.
+
+Allows the Live Call AI to request immediate feedback from the UI user during an active call.
+
+Involves a new AI tool (request_user_feedback), a WebSocket bridge for UI communication, a feedback_requests DB table, and enhancements to the CallAttemptHandler (for in-call management) and PostCallAnalyzerService (for handling replies after a call has ended).
+
+Multi-Tenancy & User Context:
+
+Core: System uses user_id to associate campaigns and tasks. The username is passed from UI to backend.
+
+Future: Plan to expand users table (or add user_profiles) to store more details (location, preferences) to make AI interactions more contextual and reduce repetitive questions.
+
+Tool-Augmented UI Assistant: UIAssistantService uses a mandatory, two-step tool-calling loop for factual queries, relying on get_authoritative_business_info (direct Places API calls via httpx) for business data and search_internet (Gemini grounded search) for general info.
+
+Modern API Usage: Deliberate use of Google Places API (New) via direct HTTP requests for reliability and future-proofing.
+
+Task vs. Call: A task is the objective (e.g., "call Store X for info"). A call (or call_attempt) is one specific phone call made in an attempt to complete that task. A task can have multiple calls.
+
+3. IMPLEMENTATION & FILE MANIFEST
+
+3.1. Required Libraries
+
+fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx. (Ensure requirements.txt is up-to-date).
+
+3.2. Detailed File Structure & Status
+(Only key files and those recently changed are listed; see project directory for all)
+
+main.py [Created] - Single entry point for the application. Handles path setup and launches Uvicorn.
+
+config/app_config.py [Modified] - Contains all config, including DB, Redis, OpenAI, and GOOGLE_API_KEY.
+
+config/prompt_config.py [Modified] - Defines UI_ASSISTANT_SYSTEM_PROMPT and ORCHESTRATOR_SYSTEM_PROMPT.
+
+database/schema.sql [Created] - Defines tables for users, campaigns, tasks, calls, call_transcripts, call_events, dnd_list. (Planned: task_updates, feedback_requests, recurrence fields in tasks).
+
+database/models.py [Modified] - Pydantic models for all DB tables.
+
+database/db_manager.py [Modified] - Handles all DB operations, including get_or_create_user, create_campaign, create_batch_of_tasks.
+
+llm_integrations/openai_form_client.py [Modified] - Contains generate_json_completion and the crucial generate_json_completion_with_tools method.
+
+llm_integrations/google_gemini_client.py [Created] - Client for general grounded internet searches via Gemini.
+
+task_manager/ui_assistant_svc.py [Modified] - Implements the tool-calling loop for the chat interface, accepts username.
+
+task_manager/orchestrator_svc.py [Created] - Takes final campaign_plan, uses LLM with schedule_call_batch tool to create DB records for campaigns and tasks.
+
+tools/information_retriever_svc.py [Modified] - Defines search_internet (uses Gemini) and get_authoritative_business_info (uses direct HTTP to Places API).
+
+web_interface/app.py [Modified] - FastAPI app; imports routes correctly, path hack removed.
+
+web_interface/routes_api.py [Modified] - Contains /api/chat_interaction and the new /api/execute_campaign endpoint.
+
+web_interface/routes_ui.py [Created] - Serves index.html.
+
+web_interface/static/css/style.css [Modified] - CSS for the chat UI, layout restored.
+
+web_interface/static/js/main.js [Modified] - JS for chat UI, username handling, and "Confirm Campaign" button functionality.
+
+common/data_models.py [Modified] - Pydantic models for API requests/responses, including ChatInteractionRequest, CampaignExecutionRequest.
+
+common/logger_setup.py [Created] - Centralized logging setup.
+
+common/redis_client.py [Created] - Client for Redis Pub/Sub.
+
+[Planned] task_manager/task_scheduler_svc.py - Background service to poll DB for due tasks and initiate calls.
+
+[Planned] call_processor_service/call_initiator_svc.py - Manages concurrency and starts call attempts.
+
+[Planned] call_processor_service/asterisk_ami_client.py - Low-level Asterisk AMI communication.
+
+[Planned] call_processor_service/call_attempt_handler.py - Manages a single call's lifecycle.
+
+[Planned] audio_processing_service/* (all files) - For handling real-time audio with Asterisk and OpenAI Realtime Voice AI.
+
+[Planned] post_call_analyzer_service/analysis_svc.py - Analyzes call outcomes, decides next steps (retry, complete, fail).
+
+[Planned] task_manager/feedback_manager_svc.py (for HITL) - Manages WebSocket communication for feedback requests.
+
+[Planned] campaign_summarizer_service/* (all files) - For generating final campaign summary reports.
+
+4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+
+Phase 2a (LLM Campaign Orchestration - UI Button & Backend Service) is now COMPLETE. The UI allows plan creation, and the "Confirm and Schedule Campaign" button successfully triggers the OrchestratorService to create campaign and task records in the database.
+
+The next logical step is to implement Phase 2b: Building the Core Task Execution Engine, starting with the TaskSchedulerService.
+
+Create task_manager/task_scheduler_svc.py:
+
+This service will be a long-running background process.
+
+It will periodically poll the tasks table in the database (using db_manager.get_due_tasks()) for tasks that are ready to be actioned (i.e., status is 'pending' or 'on_hold', next_action_time is past, and current_attempt_count < max_attempts).
+
+For each due task, it will need to trigger the next part of the call chain. Initially, this will involve updating the task's status to 'in-progress' (or similar) and logging that it would initiate a call. (The actual call initiation will be handled by CallInitiatorService which we'll build after the Scheduler).
+
+This new Wayforward.md should serve as a complete and accurate context for our next session.

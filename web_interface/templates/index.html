@@ -3,28 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenDeep - AI Assistant</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-    <script src="/static/js/main.js" defer></script>
+    <title>OpenDeep AI Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
 </head>
-<body class="dark-theme">
-
-    <div id="chat-container" class="chat-container">
-        <header class="chat-header">
-            <!-- This H1 is now a container for dynamic content -->
-            <h1 id="chat-header-title"></h1>
-            <button id="theme-toggle" class="theme-btn">Toggle Theme</button>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <!-- User info will be managed here -->
+            <div class="user-info">
+                <span id="username-display" class="hidden">APPU</span> 
+                <input type="text" id="username-input" class="username-input" placeholder="Your Name" value="APPU">
+                <button id="edit-username-btn" class="edit-username-button">Set Name</button>
+            </div>
+            <h1>AI Planning Assistant</h1>
+            <button id="toggle-theme-btn">Toggle Theme</button>
         </header>
 
-        <main id="chat-box" class="chat-box"></main>
-
-        <footer class="chat-input-area">
-            <form id="chat-form" class="chat-form">
-                <input type="text" id="chat-input" placeholder="Describe your calling task..." autocomplete="off">
+        <div id="chat-container">
+            <div id="chat-window">
+                <!-- Messages will be appended here -->
+            </div>
+            <form id="message-form">
+                <input type="text" id="message-input" placeholder="Describe your calling task..." autocomplete="off">
                 <button type="submit">Send</button>
             </form>
-        </footer>
+            <button id="confirm-campaign-btn" class="hidden">Confirm and Schedule Campaign</button>
+        </div>
     </div>
 
+    <script src="{{ url_for('static', path='/js/main.js') }}"></script>
 </body>
 </html>
