@@ -46,6 +46,10 @@ class AppConfig:
     WEB_SERVER_PORT: int = int(os.getenv("WEB_SERVER_PORT", 8000))
 
 
+    APP_TEST_MODE: bool = os.getenv("APP_TEST_MODE", "False").lower() == "true"
+    APP_TEST_MODE_REDIRECT_NUMBER: str = os.getenv("APP_TEST_MODE_REDIRECT_NUMBER", "7000")
+
+
     def __init__(self):
         # Basic validation for critical keys
         if not self.OPENAI_API_KEY:

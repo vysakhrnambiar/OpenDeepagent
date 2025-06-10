@@ -402,3 +402,244 @@ Instantiate TaskSchedulerService.
 Add task_scheduler_svc.run_scheduler_loop() to the asyncio.gather() call in main_services() so it starts with the application.
 
 This will give us the foundational loop that picks up scheduled tasks, respects DND, and is ready to hand them off for actual call initiation in the next step.
+
+Okay, I understand. You've decided to proceed with Option 2 for AMI handling (Centralized py-asterisk AMI Handler in a Dedicated Thread + Async Wrapper). We will defer the actual implementation of this switch to the "next phase" after getting the current custom AsteriskAmiClient to successfully log in (or making one final attempt at that).
+
+This Wayforward.md will reflect all our discussions, including this decision for AMI and the current state of development. This will be a good, clean state to restart our conversation from if needed.
+
+I will now generate the complete Wayforward.md Version 9.0. Please copy the entire content of my next message.
+
+OpenDeep - Master Project State & Forward Plan
+
+1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+
+This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+
+The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+
+RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+
+INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+
+PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+
+MAINTAIN STABILITY (User Instruction): Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
+
+UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
+
+INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+
+DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+2. PROJECT OVERVIEW & CURRENT STATE
+2.1. Version & Status
+
+Project Version: 9.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks, with capabilities for Human-in-the-Loop (HITL) feedback.
+
+Current Development Phase:
+
+Phase 1 (UI Foundation): Complete.
+
+Phase 1.5 (Fixes & Search Tool): Complete.
+
+Phase 1.6 (Authoritative Business Search & API Integration): Complete.
+
+Phase 2a (LLM Campaign Orchestration - UI Button & Backend Service): Complete.
+
+Phase 2b (Task Execution Engine): Implementation of core services (TaskSchedulerService, CallInitiatorService, AsteriskAmiClient, CallAttemptHandler) in progress.
+
+Current Focus: Debugging AMI login issue with the custom AsteriskAmiClient.
+
+Next Major Architectural Step (Post AMI Login Debug): Refactor AMI interaction to use py-asterisk library in a dedicated thread with an async wrapper (Option 2 discussed).
+
+2.2. Changelog / Revision History
+
+v9.0 (Current Version):
+
+Architecture Decision (AMI Client): Decided to pursue Option 2 for AMI handling: a centralized py-asterisk (the library from asterisk.ami) client running in a dedicated OS thread, with an async wrapper for the rest of the application. This change will be implemented in a subsequent phase after attempting to resolve the current login issue with the custom AsteriskAmiClient or making one final focused debugging pass on it.
+
+Debugging Focus: Identified that the current AMI login failure with the custom AsteriskAmiClient is not due to Asterisk server-side configuration (manager.conf, users, permits) or credentials, as confirmed by a successful manual Telnet AMI login test using the same credentials and from the same application server IP. The issue lies within the Python AsteriskAmiClient's implementation or its interaction with asyncio streams during the login sequence.
+
+Clarification (WebSockets & Threads): Confirmed that WebSockets for audio (Asterisk AudioSocket to app, app to OpenAI Realtime Voice/TTS) will be handled by asyncio tasks within the main event loop, not dedicated OS threads per WebSocket. The only dedicated OS thread under consideration is for wrapping the synchronous py-asterisk library.
+
+File Updates:
+
+database/models.py: Added app_config import to resolve NameError.
+
+call_processor_service/asterisk_ami_client.py: Added datetime and uuid imports to resolve NameError in AmiAction.
+
+main.py: Added typing.Optional import. Noted on_event deprecation for future refactoring to lifespan events.
+
+Test Mode: Confirmed implementation details for "Test Mode" (redirecting calls to a specific number, forcing sequential execution) involving app_config settings and logic in CallInitiatorService and CallAttemptHandler. Noted .env variables needed for this.
+
+v8.0:
+
+Feature Started (Phase 2b): Created initial structure for task_manager/task_scheduler_svc.py.
+
+Meta-Instruction Added: Permanent rule for AI to avoid changing fixed component names.
+
+v7.0:
+
+Architecture: Detailed TaskLifecycleManagerService. Solidified multi-tenancy. Refined call concurrency understanding. Clarified DND responsibility.
+
+v6.0 - v1.0: (Summarized)
+Completed Phase 2a (OrchestratorService). Multiple bug fixes. HITL planning. Google Places API integration. Search tools. UI enhancements and base project structure.
+
+2.3. Core Architecture & Key Decisions
+
+Stability Mandate: Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
+
+AMI Client Strategy (Decision from v9.0):
+
+Current Path (Debug): Make one final focused attempt to debug the login issue with the existing custom asyncio-native AsteriskAmiClient.
+
+Future Path (Refactor - Option 2): If the custom client login cannot be resolved quickly, the project will pivot to using the standard py-asterisk library (from asterisk.ami). This will involve:
+
+Running a persistent py-asterisk.AMIClient instance in one (or a few) dedicated OS worker thread(s).
+
+Creating an async wrapper class in the main application code. This wrapper will use thread-safe queues and asyncio.to_thread (or loop.run_in_executor) to pass AMI action requests to the worker thread and to receive AMI events from the worker thread back into the asyncio event loop.
+
+CallAttemptHandler and other services will interact with this async wrapper.
+
+Audio WebSockets (Decision from v9.0):
+
+Incoming audio connections from Asterisk (via AudioSocket) and outgoing connections to OpenAI Realtime Voice (and any other TTS services) will be handled by native asyncio libraries (e.g., websockets).
+
+Each live call's audio stream will be managed by an asyncio task (e.g., an AudioSocketHandler instance) without requiring a dedicated OS thread per WebSocket.
+
+Multi-Tenancy: Foundational principle. Data isolation via user_id in DB tables and service logic. LLM context scoped by user_id. User-specific DND lists.
+
+Separation of Concerns & Call Flow (High-Level):
+
+TaskSchedulerService (asyncio task): Polls DB, DND checks, hands to CallInitiatorService.
+
+CallInitiatorService (asyncio methods, called by Scheduler): Manages MAX_CONCURRENT_CALLS, creates calls DB record, spawns/starts CallAttemptHandler.
+
+CallAttemptHandler (asyncio task, one per call attempt):
+
+Manages AMI interaction for one call via the chosen AMI client strategy.
+
+Instructs Asterisk to connect audio to AudioSocketServer.
+
+Listens for commands from AudioSocketHandler via Redis.
+
+Updates calls DB. Notifies CallInitiatorService on completion.
+
+AudioSocketServer (asyncio task): Listens for AudioSocket connections from Asterisk.
+
+AudioSocketHandler (asyncio task, one per live audio stream): Bridges audio between Asterisk and OpenAI. Publishes control commands to Redis.
+
+PostCallAnalyzerService & TaskLifecycleManagerService: As previously defined.
+
+Development & Testing Strategies (New from v8.0/v9.0):
+
+Test Mode:
+
+Activated by APP_TEST_MODE=True in .env.
+
+All outbound calls redirected to APP_TEST_MODE_REDIRECT_NUMBER (e.g., "7000").
+
+MAX_CONCURRENT_CALLS forced to 1 by CallInitiatorService.
+
+Implemented by logic in CallInitiatorService (concurrency) and CallAttemptHandler (number redirection during Originate).
+
+Iterative Testing: Aim for basic operational testing of components as they are integrated, before moving too many steps ahead, to catch issues early.
+
+Future Improvements Noted:
+
+Refactor FastAPI on_event("startup") and on_event("shutdown") to use modern "lifespan" events.
+
+Transition database/db_manager.py to use a fully asynchronous database library (e.g., aiosqlite) for improved performance under high concurrency.
+
+Implement global DND based on a threshold of user-specific DNDs.
+
+3. IMPLEMENTATION & FILE MANIFEST
+3.1. Required Libraries
+
+fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, py-asterisk (will be essential for the refactored AMI client strategy).
+
+3.2. Detailed File Structure & Status
+
+(Key files and those recently changed/planned next)
+
+main.py [Modified] - Entry point. Initializes services, FastAPI app with startup/shutdown. Needs typing.Optional import. on_event deprecation noted.
+config/app_config.py [Modified] - Added APP_TEST_MODE, APP_TEST_MODE_REDIRECT_NUMBER.
+config/prompt_config.py [No Change]
+database/schema.sql [Modified] - user_id added to dnd_list and tasks.
+database/models.py [Modified] - Added TaskStatus, CallStatus enums. user_id in TaskBase, DNDEntryBase. CallCreate model. app_config import added.
+database/db_manager.py [Modified] - Integrated Enums. Added user_id to relevant queries (DND, tasks). Added async create_call_attempt, async update_call_status. Added get_call_by_id.
+
+llm_integrations/* [No Change]
+task_manager/ui_assistant_svc.py [No Change]
+task_manager/orchestrator_svc.py [No Change]
+task_manager/task_scheduler_svc.py [Modified] - Accepts and uses CallInitiatorService. Checks initiator capacity. Logic to update task status to QUEUED_FOR_CALL and revert if initiation fails.
+tools/information_retriever_svc.py [No Change]
+
+call_processor_service/asterisk_ami_client.py [Modified] - Current custom asyncio client. Added datetime, uuid imports. Target of current debugging for login. (Future: To be refactored or replaced by a wrapper around py-asterisk).
+call_processor_service/call_initiator_svc.py [Modified] - Accepts AsteriskAmiClient, RedisClient. Spawns CallAttemptHandler. Implements Test Mode concurrency limit.
+call_processor_service/call_attempt_handler.py [Modified] - Structure defined to use AsteriskAmiClient, listen to Redis, process AMI events (filtering by UniqueID), and handle Test Mode number redirection. Logic for DTMF and Hangup via AMI actions outlined.
+
+web_interface/* [No Change recently affecting backend logic]
+common/* [No Change recently]
+
+[Planned Next - Audio Processing Service based on asty.py & Option 2 AMI refactor]:
+
+audio_processing_service/audio_socket_server.py
+
+audio_processing_service/audio_socket_handler.py
+
+audio_processing_service/openai_realtime_client.py
+
+Refactor of call_processor_service/asterisk_ami_client.py (or its replacement) to use py-asterisk via threads.
+
+4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+
+The immediate priority is to resolve the AMI login failure with the current custom AsteriskAmiClient. The successful Telnet test indicates the issue is within our Python client's interaction.
+
+Focused Debugging of AsteriskAmiClient.connect_and_login():
+
+Scrutinize Banner Handling: Ensure the initial banner read (await self._reader.readuntil(b'\r\n')) is clean and doesn't interfere with subsequent reads/writes. Consider the small modification suggested previously (reading an extra byte with a tiny timeout after banner).
+
+Raw Byte Logging: Temporarily log the raw bytes being written for the Login action and the raw bytes being read immediately after, before parsing. This might reveal subtle differences from what Telnet sends/receives (e.g., encoding nuances, extra characters, timing).
+
+# In send_action, before self._writer.write()
+action_bytes = str(action_obj) 
+logger.debug(f"RAW AMI SEND (len {len(action_bytes)}): {action_bytes!r}") # !r shows escapes
+self._writer.write(action_bytes)
+
+# In _receive_loop, after data = await self._reader.readuntil(...)
+logger.debug(f"RAW AMI RECV (len {len(data)}): {data!r}")
+
+
+Simplify _receive_loop Temporarily (for login only): To diagnose the login response, temporarily make the _receive_loop only try to read and parse the login response (identified by ActionID) and log it, without yet trying to dispatch other events. This reduces complexity for this specific debug.
+
+Timing: Experiment with a very small asyncio.sleep() (e.g., 0.05s) immediately after self._writer.drain() in send_action when sending the Login action, just to see if Asterisk needs a fractional moment (though it shouldn't).
+
+Decision Point:
+
+If the login issue with the custom AsteriskAmiClient can be fixed with these focused debugging steps (e.g., within 1-2 more sessions of effort), we proceed with the current client.
+
+If it remains elusive and time-consuming, we pivot to implementing Option 2 for AMI handling: Refactor AsteriskAmiClient to be an async wrapper around py-asterisk (from asterisk.ami) running in a dedicated OS thread using asyncio.to_thread. This will leverage a known-good AMI protocol implementation.
+
+Once AMI login is successful (either via fix or refactor), the immediate next step will be the initial integration test run as previously detailed:
+* Run python main.py with Asterisk and Redis active.
+* Use the UI or manually create a task in the DB.
+* Observe logs and Asterisk CLI to see if TaskSchedulerService picks up the task, CallInitiatorService spawns CallAttemptHandler, and CallAttemptHandler successfully sends an Originate command to Asterisk, resulting in a call to the test extension 7000.
+
+This plan prioritizes unblocking the critical AMI login.
