@@ -548,3 +548,176 @@ Simultaneously, AMI events related to the call attempt should start appearing in
 Focus: For this first test, the primary goal is to see extension 7000 ring. Detailed event handling in CallAttemptHandler can be refined iteratively after this.
 
 This plan focuses on leveraging the now-working AMI client to achieve the first system-initiated call.
+
+# OpenDeep - Master Project State & Forward Plan
+
+## 1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+- This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+- The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+- RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+- INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+- PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+- MAINTAIN STABILITY (User Instruction): Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
+- UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
+- INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+- DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+## 2. PROJECT OVERVIEW & CURRENT STATE
+
+### 2.1. Version & Status
+
+Project Version: 11.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks, with capabilities for Human-in-the-Loop (HITL) feedback.
+
+Current Development Phase:
+- Phase 1 (UI Foundation): Complete.
+- Phase 1.5 (Fixes & Search Tool): Complete.
+- Phase 1.6 (Authoritative Business Search & API Integration): Complete.
+- Phase 2a (LLM Campaign Orchestration - UI Button & Backend Service): Complete.
+- Phase 2b (Task Execution Engine): OrchestratorService successfully creates campaigns and tasks. TaskSchedulerService initializes and polls. CallInitiatorService and CallAttemptHandler structures are in place. AMI client connects.
+
+Current Focus: Debugging why `TaskSchedulerService` is not picking up newly created (and presumably due) tasks from the database, despite successful task creation by `OrchestratorService`.
+
+Next Major Architectural Step: Achieving the first successful call origination via the integrated services chain, then integrating the AudioSocket service.
+
+### 2.2. Changelog / Revision History
+
+v11.0 (Current Version):
+- **Success (Campaign & Task Creation):** Resolved `NameError` (typo `master_agent_promt`) and `ValidationError` (missing `user_id` in `TaskCreate`) in `OrchestratorService`. Campaigns and tasks are now successfully created in the database when triggered from the UI via `/api/execute_campaign`.
+- **Success (Lifespan Manager):** Implemented FastAPI `lifespan` manager in `web_interface/app.py` (calling lifecycle functions from `main.py`), resolving the duplicate service initialization issue caused by Uvicorn's reloader. Services now start cleanly once.
+- **Bug (Task Not Picked Up):** `TaskSchedulerService` is polling but consistently reports "No due tasks found" even after tasks are confirmed to be created in the `tasks` table with `status='pending'` and a recent `next_action_time`.
+- **Debugging Focus:** Added detailed logging to `db_manager.get_due_tasks` to trace query execution, parameters, fetched rows, and Pydantic parsing.
+- **Schema Fix (DND List):** Identified and corrected a missing `user_id` column in the `dnd_list` table schema (`database/schema.sql`) and instructed for DB re-initialization. This was a prior error source during `TaskSchedulerService` processing.
+- **Async Call Pattern Refinement:** Clarified and applied `await` vs. `await loop.run_in_executor()` for `db_manager` functions based on their `def` vs `async def` signatures in `CallInitiatorService` and `CallAttemptHandler`. (Still verifying the exact state of `db_manager.py` for final confirmation).
+- **AMI Client:** `AsteriskAmiClient` connects and logs in successfully. A brief ping failure was observed but the client attempted recovery.
+
+v10.0:
+- Major Success (AMI Client Refactor): Successfully refactored `AsteriskAmiClient` to use `asterisk-ami==0.1.7`, enabling reliable AMI connection, login, action sending, and event dispatch.
+- Debugging: Resolved numerous errors during AMI client refactoring.
+
+v9.0:
+- Architecture Decision (AMI Client): Planned to use `py-asterisk` (superseded by v10.0).
+- Debugging Focus: AMI login client-side issues.
+
+v8.0 - v1.0: (Summarized) UI, Orchestrator (Phase 2a), Search Tools, API integrations, foundational structures.
+
+### 2.3. Core Architecture & Key Decisions
+
+Lifespan Management (Decision from v11.0): FastAPI's `lifespan` context manager is now used for application startup and shutdown, providing a more robust way to manage background service initialization and termination compared to `on_event` decorators, especially with Uvicorn's reloader.
+
+Database Schema (`tasks` and `dnd_list` tables - v11.0):
+- `tasks` table schema confirmed to require `user_id`.
+- `dnd_list` table schema updated to include `user_id` and a `UNIQUE(user_id, phone_number)` constraint to support per-user DND lists.
+
+Async DB Calls (Ongoing Refinement - v11.0): The pattern for calling `db_manager.py` functions from `async` services is:
+- If `db_manager.func()` is `def` (synchronous): use `await loop.run_in_executor(None, db_manager.func, ...)`
+- If `db_manager.func()` is `async def` (asynchronous wrapper or true async): use `await db_manager.func(...)`
+This is being applied consistently across services.
+
+AMI Client Implementation (Decision from v10.0): Uses a refactored `AsteriskAmiClient` wrapping `asterisk-ami==0.1.7` in a worker thread.
+
+Stability Mandate: Do not change variable names, database names, or fixed components.
+
+Audio WebSockets (Decision from v9.0): Native asyncio libraries for audio.
+
+Multi-Tenancy: Foundational.
+
+Separation of Concerns & Call Flow: (As previously detailed) TaskScheduler -> CallInitiator -> CallAttemptHandler -> AMI Client. Audio path via AudioSocket (future).
+
+### 3. IMPLEMENTATION & FILE MANIFEST
+
+### 3.1. Required Libraries
+fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, asterisk-ami==0.1.7.
+
+### 3.2. Detailed File Structure & Status
+
+(Key files and those recently changed/planned next)
+
+**main.py** [Modified] - Defines service lifecycle functions (`actual_start_services`, `actual_shutdown_services`), initializes logger. Uvicorn runs `web_interface.app:app`.
+
+**web_interface/app.py** [Modified] - Defines FastAPI `app` instance, now uses the `lifespan` context manager which calls lifecycle functions from `main.py`.
+
+**database/schema.sql** [Modified] - Added `user_id` to `tasks` and `dnd_list` tables. Added `UNIQUE` constraint to `dnd_list`.
+
+**database/db_manager.py** [Modified] - Contains DB interaction logic. Added detailed logging to `get_due_tasks`. (Its `def` vs `async def` status for various functions is key for current debugging).
+
+**task_manager/orchestrator_svc.py** [Modified] - Successfully creates campaigns and tasks. Corrected `TaskCreate` instantiation (added `user_id`) and a typo. Prompting for LLM tool use refined.
+
+**task_manager/task_scheduler_svc.py** [Modified] - Correctly uses `run_in_executor` for synchronous `db_manager` calls (`get_due_tasks`, `is_on_dnd_list`). Currently reports "No due tasks found."
+
+**call_processor_service/call_initiator_svc.py** [Modified] - Adjusted to correctly `await` or use `run_in_executor` for `db_manager` calls based on their assumed signatures.
+
+**call_processor_service/call_attempt_handler.py** [Modified] - Adjusted to correctly `await` or use `run_in_executor` for `db_manager` calls based on their assumed signatures. (Full logic for `_process_ami_event` needs to be consistently maintained and verified).
+
+**call_processor_service/asterisk_ami_client.py** [Modified earlier] - Core AMI client using `asterisk-ami`. Connects successfully.
+
+config/app_config.py [Modified earlier]
+config/prompt_config.py [Modified earlier] - `ORCHESTRATOR_SYSTEM_PROMPT` refined.
+database/models.py [Modified earlier]
+llm_integrations/* [No Change recently]
+task_manager/ui_assistant_svc.py [No Change recently]
+tools/information_retriever_svc.py [No Change recently]
+web_interface/routes_api.py [No Change recently]
+web_interface/routes_ui.py [No Change recently]
+web_interface/static/* [No Change recently]
+web_interface/templates/* [No Change recently]
+common/* [No Change recently]
+
+[Planned Next - Debugging Task Pickup & First Call Origination]
+
+## 4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+
+The immediate priority is to diagnose why `TaskSchedulerService` is not finding the newly created tasks, even though `OrchestratorService` confirms their creation in the database.
+
+1.  **Verify Database State After Task Creation:**
+    *   After the UI flow creates a campaign and `/api/execute_campaign` returns a success (200 OK), manually inspect the `tasks` table in `test_opendeep.db` (or your DB file).
+    *   **Query:** `SELECT id, campaign_id, user_id, status, next_action_time, typeof(next_action_time), current_attempt_count, max_attempts FROM tasks WHERE campaign_id = <the_new_campaign_id>;`
+    *   **Confirm:**
+        *   A task record exists for the new campaign.
+        *   `status` is 'pending'.
+        *   `next_action_time` is a valid recent timestamp string (e.g., "2025-06-11 HH:MM:SS.ffffff").
+        *   `typeof(next_action_time)` is 'text'.
+        *   `current_attempt_count` is 0.
+        *   `max_attempts` is your default (e.g., 3).
+        *   `user_id` is correct.
+
+2.  **Analyze Detailed Logs from `db_manager.get_due_tasks`:**
+    *   Ensure the detailed logging (query, params, fetched rows count, parsing success/errors) added previously to `db_manager.get_due_tasks` is active.
+    *   After creating a task via the UI, observe the application logs during the next poll cycle of `TaskSchedulerService`.
+    *   **Focus on these log lines from `get_due_tasks`:**
+        *   `DEBUG - db_manager.py: ... - get_due_tasks: Executing query: ... with params: ...` (Verify the query and that 'pending' is in the status params).
+        *   `DEBUG - db_manager.py: ... - get_due_tasks: Fetched X raw rows from DB.` (If X is 0, the SQL query itself is the primary issue. If X is 1 (or more), the issue is in subsequent Python processing within `get_due_tasks`).
+        *   If rows are fetched, any Pydantic parsing logs (`Successfully parsed task ID...` or `Error parsing row...`).
+
+3.  **Review `db_manager.get_due_tasks` SQL Query Conditions:**
+    Based on the logs from step 2, re-evaluate each part of the `WHERE` clause against the confirmed data in the `tasks` table (from step 1).
+    *   `status IN ('pending', 'retry_scheduled', 'on_hold')` (or similar)
+    *   `(next_action_time IS NULL OR next_action_time <= CURRENT_TIMESTAMP)`
+    *   `current_attempt_count < max_attempts`
+
+4.  **If SQL returns 0 rows (but task exists and *should* match):**
+    *   Consider subtle issues with SQLite's `CURRENT_TIMESTAMP` vs. the stored text timestamp. Temporarily simplify the `next_action_time` condition in `get_due_tasks` to just `(next_action_time IS NOT NULL)` or even remove it entirely for one test run to see if tasks are then picked up (this would isolate the time comparison as the problem).
+    *   Ensure `datetime` objects are being stored in a consistent ISO8601 format that SQLite's date/time functions can compare correctly with `CURRENT_TIMESTAMP` if direct string comparison isn't working as expected. SQLite usually handles standard ISO8601 strings well.
+
+Once `TaskSchedulerService` successfully picks up a task:
+*   The logs should show it being passed to `CallInitiatorService`.
+*   `CallInitiatorService` should spawn `CallAttemptHandler`.
+*   `CallAttemptHandler` should use `AsteriskAmiClient` to send an `Originate` action.
+*   Asterisk CLI should show the call attempt, and your test extension should ring.
+
+This systematic debugging of `get_due_tasks` is the critical path to unblocking call origination.

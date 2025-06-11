@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
 -- Main tasks table, now linked to campaigns
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    campaign_id INTEGER NOT NULL,                       -- Foreign key to campaigns table
+    campaign_id INTEGER NOT NULL,            
+    user_id INTEGER NOT NULL,            -- Foreign key to campaigns table
     user_task_description TEXT NOT NULL,                -- The original campaign goal
     generated_agent_prompt TEXT NOT NULL,               -- Prompt for the Realtime Call LLM for this specific task
     business_name TEXT,
@@ -75,14 +76,17 @@ CREATE TABLE IF NOT EXISTS call_events (
     FOREIGN KEY (call_id) REFERENCES calls(id) ON DELETE CASCADE
 );
 
--- Do Not Disturb list (Unchanged)
+
 CREATE TABLE IF NOT EXISTS dnd_list (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone_number TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL, -- <<< ADD THIS LINE
+    phone_number TEXT NOT NULL, -- Keep this, but a user might DND a number another user wants to call
     reason TEXT,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    task_id INTEGER,
-    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+    task_id INTEGER, -- This can be kept to know which task triggered the DND initially
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, -- <<< ADD THIS FK
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+    UNIQUE(user_id, phone_number) -- <<< ADD UNIQUE constraint for user_id + phone_number
 );
 
 -- Triggers for updated_at (Unchanged)

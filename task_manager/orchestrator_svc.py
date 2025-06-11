@@ -59,7 +59,8 @@ class OrchestratorService:
         if not contacts:
             return json.dumps({"error_message": "Execution failed: No contacts provided."})
 
-        campaign_goal = "Campaign goal derived from user interaction (can be enhanced)." 
+        campaign_goal_desc_max_len = 50000 # Max length for description in DB
+        campaign_goal = master_agent_prompt[:campaign_goal_desc_max_len] + "..." if len(master_agent_prompt) > campaign_goal_desc_max_len else master_agent_prompt
         campaign_data = CampaignCreate(
             user_id=self.user_id,
             batch_id=str(uuid.uuid4()),
@@ -76,6 +77,7 @@ class OrchestratorService:
             
             task_data = TaskCreate(
                 campaign_id=campaign.id,
+                user_id=self.user_id,
                 user_task_description=campaign_goal, 
                 generated_agent_prompt=personalized_prompt,
                 phone_number=contact["phone"],
@@ -113,7 +115,7 @@ class OrchestratorService:
              logger.warning(f"User ID {self.user_id}: Invalid campaign plan structure received: {campaign_plan}")
              return {"status": "error", "message": "Invalid campaign plan structure."}
 
-        user_instruction_message = f"Please schedule the campaign defined by the following plan: {json.dumps(campaign_plan)}"
+        user_instruction_message = f"Use the 'schedule_call_batch' tool with the 'master_agent_prompt' and 'contacts' from the following campaign plan. Campaign Plan: {json.dumps(campaign_plan)}"
         
         conversation = [
             {"role": "user", "content": user_instruction_message}
