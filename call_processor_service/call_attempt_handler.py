@@ -72,10 +72,15 @@ class CallAttemptHandler:
             logger.warning(f"[CallAttemptHandler:{self.call_id}] TEST MODE ENABLED. Redirecting call for {original_number_for_logging} to {target_phone_number}.")
 
         channel_to_dial = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{app_config.DEFAULT_CALLER_ID_EXTEN}/{target_phone_number}"
+        #dial_string = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" 
+        
+        # This is the CRITICAL CHANGE: The Data field for AudioSocket
+        full_audiosocket_uri_with_call_id = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}"
+        logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_call_id}")
         
 # In call_processor_service/call_attempt_handler.py, inside _originate_call method
 
-        # Determine the channel to originate FROM
+        # Determine the channel to originate FROMsend_action
         # This could be a specific local channel if you have one set up for app-originated calls,
         # or using a generic local channel construct if Asterisk supports it for originating.
         # For dialing an internal extension like '7000' which is also a PJSIP endpoint,
@@ -88,23 +93,31 @@ class CallAttemptHandler:
 
         originate_action = AmiAction(
             "Originate",
-            Channel=dial_string,                           # Channel to dial (e.g., PJSIP/7000)
-            Context=app_config.DEFAULT_ASTERISK_CONTEXT,   # Context where the call will start after being answered
-            Exten="s",                                     # Extension 's' in that context
-            Priority=1,                                    # Priority 1
-            Application="AudioSocket",                     # Application to run on the answered call
-            Data=f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}",
-            CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>", # Caller ID to present
-            Timeout=30000, 
-            Async="true", 
-            Variable=f"CALL_ATTEMPT_ID={self.call_id},TASK_ID={self.task_id},USER_ID={self.task_user_id}"
+            Channel=dial_string,                        # Channel to dial (e.g., PJSIP/7000)
+            Context="opendeep-audiosocket-outbound",    # Target the dialplan context
+            Exten="s",                                  # Target the 's' extension in that context
+            Priority=1,                                 # Target priority 1
+            # Application="AudioSocket",                # <<< MUST BE REMOVED
+            # Data=audiosocket_uri,                     # <<< MUST BE REMOVED
+            CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>",
+            Timeout=30000,
+            Async="true",
+            Variable=[ # Pass variables as a list for clarity if your AmiAction supports it
+                f"CALL_ATTEMPT_ID={self.call_id}",
+                f"TASK_ID={self.task_id}",              # Good for logging/context in Asterisk
+                f"USER_ID={self.task_user_id}",          # Good for logging/context in Asterisk
+                f"TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id}" # Crucial for the dialplan
+            ]
+            # If your AmiAction expects variables as a single comma-separated string:
+            # Variable=f"CALL_ATTEMPT_ID={self.call_id},TASK_ID={self.task_id},USER_ID={self.task_user_id},TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id.replace(',', '\\,')}"
+            # Note: If the URI itself could contain commas, you'd need to escape them if passing as a single string. List is safer.
         )
         
         self.originate_action_id = originate_action.get_action_id()
         logger.info(f"[CallAttemptHandler:{self.call_id}] Originate ActionID set to: {self.originate_action_id}")
 
         self.call_start_time = datetime.now()
-        response = await self.ami_client.send_action(originate_action)
+        response = await self.ami_client.send_action(originate_action, timeout=25.0)
         
         if response and response.get("Response") == "Success":
             logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number} (Task Phone: {original_number_for_logging}). ActionID: {self.originate_action_id}. Awaiting events.")

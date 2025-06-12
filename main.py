@@ -22,7 +22,7 @@ from common.redis_client import RedisClient
 from call_processor_service.asterisk_ami_client import AsteriskAmiClient
 from call_processor_service.call_initiator_svc import CallInitiatorService
 from task_manager.task_scheduler_svc import TaskSchedulerService
-
+from audio_processing_service.audio_socket_server import AudioSocketServer # Added
 # --- Global Service Instances ---
 # These will be initialized by start_background_services
 redis_client: Optional[RedisClient] = None
@@ -30,11 +30,13 @@ ami_client: Optional[AsteriskAmiClient] = None
 call_initiator_svc: Optional[CallInitiatorService] = None
 task_scheduler_svc: Optional[TaskSchedulerService] = None
 background_services_task: Optional[asyncio.Task] = None
+# --- NEW GLOBAL INSTANCE ---
+audio_socket_server: Optional[AudioSocketServer] = None # Added
 
 # --- Lifecycle Functions (to be called by lifespan manager) ---
 async def actual_start_services():
     """Initializes and starts all background services. Renamed to avoid conflict."""
-    global redis_client, ami_client, call_initiator_svc, task_scheduler_svc
+    global redis_client, ami_client, call_initiator_svc, task_scheduler_svc, audio_socket_server
 
     logger.info("actual_start_services: Initializing background services...")
     initialize_database() # Initialize DB here
@@ -70,10 +72,27 @@ async def actual_start_services():
     else:
         logger.error("actual_start_services: Could not init TaskSchedulerService.")
 
+
+    if redis_client: # AudioSocketServer needs RedisClient (passed to handler)
+        audio_socket_server = AudioSocketServer(
+            host=app_config.AUDIOSOCKET_HOST,
+            port=app_config.AUDIOSOCKET_PORT,
+            redis_client=redis_client
+        )
+        logger.info("actual_start_services: AudioSocketServer initialized.")
+    else:
+        logger.error("actual_start_services: Redis client not available, cannot initialize AudioSocketServer.")
+
     service_tasks_to_gather = []
     if task_scheduler_svc:
         service_tasks_to_gather.append(asyncio.create_task(task_scheduler_svc.run_scheduler_loop()))
         logger.info("actual_start_services: TaskSchedulerService loop started.")
+    
+    # --- ADD AUDIOSOCKETSERVER START TO TASKS ---
+    if audio_socket_server:
+        service_tasks_to_gather.append(asyncio.create_task(audio_socket_server.start()))
+        logger.info("actual_start_services: AudioSocketServer start task created.")
+
 
     if service_tasks_to_gather:
         logger.info(f"actual_start_services: Running {len(service_tasks_to_gather)} bg tasks.")
@@ -91,6 +110,17 @@ async def actual_shutdown_services():
     logger.info("actual_shutdown_services: Shutting down background services...")
     if task_scheduler_svc:
         task_scheduler_svc.stop_scheduler_loop()
+
+    
+    
+    # --- STOP AUDIOSOCKETSERVER ---
+    if audio_socket_server:
+        try:
+            await audio_socket_server.stop()
+            logger.info("actual_shutdown_services: AudioSocketServer stopped.")
+        except Exception as e:
+            logger.error(f"actual_shutdown_services: Error stopping AudioSocketServer: {e}", exc_info=True)
+            
     if ami_client:
         await ami_client.close()
     if redis_client:

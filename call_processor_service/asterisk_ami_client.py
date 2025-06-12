@@ -69,7 +69,7 @@ class AsteriskAmiClient:
         self._generic_event_listeners: Set[Callable[[Dict[str, Any]], Awaitable[None]]] = set()
         
         self._connection_retry_delay = 5
-        self._keepalive_interval = 20
+        self._keepalive_interval = 540
 
     # _InternalAmiEventListener class is no longer needed if we use a simple lambda for add_event_listener
 
@@ -220,30 +220,32 @@ class AsteriskAmiClient:
                          last_keepalive_time = time.monotonic()
 
                 except thread_safe_queue.Empty:
-                    if time.monotonic() - last_keepalive_time > self._keepalive_interval:
-                        logger.debug("Worker: Sending keepalive Ping.")
-                        try:
-                            ping_ami_action_obj = AmiAction('Ping') # Our helper makes ActionID
-                            ping_action_for_lib = SimpleAction('Ping', **ping_ami_action_obj.get_headers())
+                    #if time.monotonic() - last_keepalive_time > self._keepalive_interval:
+                     #   logger.debug("Worker: Sending keepalive Ping.")
+                      #  try:
+                       #     ping_ami_action_obj = AmiAction('Ping') # Our helper makes ActionID
+                        #    ping_action_for_lib = SimpleAction('Ping', **ping_ami_action_obj.get_headers())
                             
-                            ping_future = self._sync_ami_client.send_action(ping_action_for_lib)
-                            ping_response_obj = ping_future.response
+                         #   ping_future = self._sync_ami_client.send_action(ping_action_for_lib)
+                          #  ping_response_obj = ping_future.response
                             
-                            if ping_response_obj and not ping_response_obj.is_error():
-                                logger.debug(f"Worker: AMI Ping successful. Details: {getattr(ping_response_obj, 'keys', {})}")
-                            else: # Ping failed or timed out
-                                ping_err_msg = "Ping failed"
-                                if ping_response_obj and hasattr(ping_response_obj, 'keys'):
-                                    ping_err_msg += f" - Response: {ping_response_obj.keys.get('Response', 'Error')}, Message: {ping_response_obj.keys.get('Message', 'Unknown')}"
-                                elif ping_response_obj: ping_err_msg += f" - Unexpected obj: {str(ping_response_obj)[:100]}"
-                                else: ping_err_msg += " - No response object (timeout on future.response)"
-                                logger.warning(f"Worker: AMI Ping response issue: {ping_err_msg}")
-                                raise ConnectionAbortedError(f"Ping failure implies connection loss: {ping_err_msg}")
-                            last_keepalive_time = time.monotonic()
-                        except Exception as e_ping: # Includes ConnectionAbortedError from above
-                            logger.error(f"Worker: Error during Ping processing: {e_ping}")
-                            raise ConnectionAbortedError(f"Ping processing failed, connection likely lost: {e_ping}") from e_ping
-        
+                           # if ping_response_obj and not ping_response_obj.is_error():
+                            #    logger.debug(f"Worker: AMI Ping successful. Details: {getattr(ping_response_obj, 'keys', {})}")
+                            #else: # Ping failed or timed out
+                             #   ping_err_msg = "Ping failed"
+                              #  if ping_response_obj and hasattr(ping_response_obj, 'keys'):
+                                #    ping_err_msg += f" - Response: {ping_response_obj.keys.get('Response', 'Error')}, Message: {ping_response_obj.keys.get('Message', 'Unknown')}"
+                               # elif ping_response_obj: ping_err_msg += f" - Unexpected obj: {str(ping_response_obj)[:100]}"
+                            #    else: ping_err_msg += " - No response object (timeout on future.response)"
+                             #   logger.warning(f"Worker: AMI Ping response issue: {ping_err_msg}")
+                              #  raise ConnectionAbortedError(f"Ping failure implies connection loss: {ping_err_msg}")
+                            #last_keepalive_time = time.monotonic()
+                        
+
+                        #except Exception as e_ping: # Includes ConnectionAbortedError from above
+                         #   logger.error(f"Worker: Error during Ping processing: {e_ping}")
+                          #  raise ConnectionAbortedError(f"Ping processing failed, connection likely lost: {e_ping}") from e_ping
+                    pass
         except (ConnectionRefusedError, socket.timeout, OSError, ConnectionAbortedError) as e:
             logger.error(f"AMI Worker Thread: Connection or Critical Action Error: {e}")
             if self._main_loop:
