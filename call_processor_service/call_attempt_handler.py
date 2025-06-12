@@ -73,15 +73,28 @@ class CallAttemptHandler:
 
         channel_to_dial = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{app_config.DEFAULT_CALLER_ID_EXTEN}/{target_phone_number}"
         
+# In call_processor_service/call_attempt_handler.py, inside _originate_call method
+
+        # Determine the channel to originate FROM
+        # This could be a specific local channel if you have one set up for app-originated calls,
+        # or using a generic local channel construct if Asterisk supports it for originating.
+        # For dialing an internal extension like '7000' which is also a PJSIP endpoint,
+        # originating FROM 'opendeep_trunk' TO '7000' is the goal.
+        
+        # The channel we want Asterisk to create and use for the outbound leg TO the target_phone_number.
+        # This is usually just the technology and the number for external calls.
+        # For internal calls to another PJSIP endpoint, it's PJSIP/extension_to_dial
+        dial_string = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g., PJSIP/7000
+
         originate_action = AmiAction(
             "Originate",
-            Channel=channel_to_dial,
-            Context=app_config.DEFAULT_ASTERISK_CONTEXT,
-            Exten="s", 
-            Priority=1,
-            Application="AudioSocket",
+            Channel=dial_string,                           # Channel to dial (e.g., PJSIP/7000)
+            Context=app_config.DEFAULT_ASTERISK_CONTEXT,   # Context where the call will start after being answered
+            Exten="s",                                     # Extension 's' in that context
+            Priority=1,                                    # Priority 1
+            Application="AudioSocket",                     # Application to run on the answered call
             Data=f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}",
-            CallerID=f"OpenDeep <{task.phone_number[:10]}>",
+            CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>", # Caller ID to present
             Timeout=30000, 
             Async="true", 
             Variable=f"CALL_ATTEMPT_ID={self.call_id},TASK_ID={self.task_id},USER_ID={self.task_user_id}"

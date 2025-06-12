@@ -251,7 +251,7 @@ def get_due_tasks(user_id: Optional[int] = None, max_tasks: int = 10) -> List[Ta
         base_query = """
             SELECT * FROM tasks
             WHERE (status = ? OR status = ? OR status = ?)
-              AND (next_action_time IS NULL OR next_action_time <= CURRENT_TIMESTAMP)
+              -- AND (next_action_time IS NULL OR next_action_time <= CURRENT_TIMESTAMP) -- Temporarily commented out for testing SQL fetch
               AND current_attempt_count < max_attempts
         """
         params: List[Any] = [
@@ -260,23 +260,55 @@ def get_due_tasks(user_id: Optional[int] = None, max_tasks: int = 10) -> List[Ta
             TaskStatus.RETRY_SCHEDULED.value
         ]
 
-        if user_id is not None:
+        if user_id is not None: # This part is correct and should remain
             base_query += " AND user_id = ?"
             params.append(user_id)
         
         base_query += " ORDER BY next_action_time ASC, created_at ASC LIMIT ?"
         params.append(max_tasks)
 
+        logger.debug(f"get_due_tasks: Executing query: [{base_query.strip()}] with params: {tuple(params)}")
+        
         cursor.execute(base_query, tuple(params))
-        for row in cursor.fetchall():
-            tasks.append(Task(**row))
+        
+        raw_rows = cursor.fetchall()
+        logger.debug(f"get_due_tasks: Fetched {len(raw_rows)} raw rows from DB.")
+
+        if not raw_rows:
+            logger.debug("get_due_tasks: No raw rows fetched, so loop will not run.")
+
+        for i, row_data in enumerate(raw_rows): # Iterate over fetched rows
+            logger.debug(f"get_due_tasks: Processing row {i+1}/{len(raw_rows)}")
+            try:
+                logger.debug(f"get_due_tasks: Raw row_data type: {type(row_data)}, content (first 100 chars if long): {str(row_data)[:100]}")
+                
+                row_as_dict = dict(row_data)
+                logger.debug(f"get_due_tasks: Row as dict: {row_as_dict}")
+
+                task_obj = Task(**row_as_dict) 
+                tasks.append(task_obj)
+                logger.debug(f"get_due_tasks: Successfully parsed task ID {task_obj.id} (campaign_id: {task_obj.campaign_id}) into Pydantic model.")
+            except Exception as e_parse:
+                # Log the dictionary representation of row_data in case of error
+                error_row_dict_str = "Could not convert row_data to dict for error logging"
+                try:
+                    error_row_dict_str = str(dict(row_data))
+                except Exception:
+                    pass # Keep the default error string
+                logger.error(f"get_due_tasks: Error parsing row {i+1}. Data that caused error (potentially as dict): {error_row_dict_str}. Error: {e_parse}", exc_info=True)
+                logger.error(f"get_due_tasks: Exception type during parsing: {type(e_parse)}")
+            logger.debug(f"get_due_tasks: Finished processing row {i+1}/{len(raw_rows)}.")
+                
     except sqlite3.Error as e:
         logger.error(f"Database error in get_due_tasks (user_id: {user_id}): {e}", exc_info=True)
     finally:
         conn.close()
+    
+    if not tasks:
+        logger.debug(f"get_due_tasks: Returning empty list (no tasks met criteria or parsed successfully).")
+    else:
+        logger.debug(f"get_due_tasks: Returning {len(tasks)} parsed tasks.")
     return tasks
-
-# --- Call Operations ---
 
 # Add this function to database/db_manager.py (or replace if a similar one exists)
 
@@ -298,22 +330,24 @@ def get_call_by_id(call_id: int) -> Optional[Call]:
         conn.close()
 
 # NEW ASYNC FUNCTION
-async def create_call_attempt(call_data: CallCreate) -> Optional[Call]:
+# In database/db_manager.py
+
+def create_call_attempt(call_data: CallCreate) -> Optional[Call]:
     """Creates a new call attempt record in the database."""
-    # This remains internally synchronous for now, as discussed.
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        current_time = datetime.now() # Get current time
         cursor.execute("""
-            INSERT INTO calls (task_id, attempt_number, status, prompt_used)
-            VALUES (?, ?, ?, ?)
-        """, (call_data.task_id, call_data.attempt_number, call_data.status.value, call_data.prompt_used))
+            INSERT INTO calls (task_id, attempt_number, status, prompt_used, scheduled_time)
+            VALUES (?, ?, ?, ?, ?)
+        """, (call_data.task_id, call_data.attempt_number, call_data.status.value, call_data.prompt_used, current_time)) # Add current_time
         conn.commit()
         call_id = cursor.lastrowid
         if call_id:
             cursor.execute("SELECT * FROM calls WHERE id = ?", (call_id,))
             row = cursor.fetchone()
-            return Call(**row) if row else None
+            return Call(**dict(row)) if row else None
         logger.error(f"Failed to get lastrowid after inserting call for task {call_data.task_id}")
         return None
     except sqlite3.Error as e:
@@ -323,7 +357,7 @@ async def create_call_attempt(call_data: CallCreate) -> Optional[Call]:
         conn.close()
 
 # NEW ASYNC FUNCTION
-async def update_call_status(call_id: int, status: CallStatus,
+def update_call_status(call_id: int, status: CallStatus,
                              hangup_cause: Optional[str] = None,
                              call_conclusion: Optional[str] = None,
                              duration_seconds: Optional[int] = None,
