@@ -480,3 +480,283 @@ We need to see if Asterisk is trying to send RTP packets (even if they are silen
 Check NAT & directmedia: We have direct_media=no on the endpoint, which is correct. This forces audio through Asterisk. The rtp set debug on will confirm if Asterisk is correctly handling the media paths between the PJSIP/7000 channel and the Local channel where the AudioSocket application is running. It's possible the audio bridge between the two legs of the Local channel is not being established correctly.
 
 By tackling these two issues simultaneously, we can stabilize the entire call path and have a working end-to-end connection with a live audio stream ready for AI integration.
+
+You've got it. Your understanding is perfect, and your plan to integrate a proper UUID is exactly right. We'll use the database call_id for our internal application logic and the generated UUID for all Asterisk interactions related to a specific call leg.
+
+Here is the updated Wayforward.md incorporating this as the next crucial step. I've also made sure to update the status of the files we've worked on and capture the key decisions from this session.
+
+OpenDeep - Master Project State & Forward Plan
+1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+
+This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+
+The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+
+RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+
+INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+
+PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+
+MAINTAIN STABILITY (User Instruction): Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
+
+UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
+
+INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+
+DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+2. PROJECT OVERVIEW & CURRENT STATE
+2.1. Version & Status
+
+Project Version: 13.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks.
+
+Current Development Phase: Phase 2b (Task Execution Engine & Audio Path).
+
+Current Focus: Implementing proper UUID handling for Asterisk interactions to resolve the app_audiosocket "Failed to parse UUID" error and achieve a stable WebSocket connection for audio.
+
+Next Major Architectural Step: Establish a stable, bi-directional audio stream between the softphone, Asterisk, and the Python AudioSocketHandler. Then, integrate AI audio processing.
+
+2.2. Changelog / Revision History
+
+v13.0 (Current Version):
+
+Critical Insight: Identified that app_audiosocket.c in Asterisk, when invoked as a dialplan application AudioSocket(URI,options), was still erroring with "Failed to parse UUID" because the URI was being misinterpreted as the first argument, which it expected to be a UUID. This occurred even with the corrected dialplan syntax AudioSocket(ws://...,cn).
+
+Root Cause Diagnosis: The actual root cause is that app_audiosocket (when used in this specific dialplan application form: AudioSocket(URI,cn)) expects the URI's path component (e.g., /callaudio/THIS_PART) to be a standard UUID if the URI is the first argument. Our database call_id (an integer) was being used here, causing the parse failure.
+
+Architecture Decision (UUID for Asterisk): Decided to generate a standard UUID (using Python's uuid.uuid4()) in CallAttemptHandler specifically for Asterisk's consumption. This UUID will be passed in the WebSocket URI path. The database call_id (integer) will remain the primary key for internal application logic.
+
+Database Modification Required: The calls table will need a new asterisk_call_uuid (TEXT, UNIQUE) column to store this generated UUID.
+
+Code Modification Path:
+
+Modify database/schema.sql to add the asterisk_call_uuid column to the calls table.
+
+Modify database/models.py (CallBase, CallCreate, Call) to include asterisk_call_uuid.
+
+Modify database/db_manager.py (create_call_attempt, update_call_status, etc.) to handle the new asterisk_call_uuid field.
+
+Modify call_processor_service/call_attempt_handler.py:
+
+Generate a uuid.uuid4() when a call is initiated.
+
+Store this UUID in the new asterisk_call_uuid field of the calls DB record.
+
+Use this asterisk_call_uuid in the FULL_AUDIOSOCKET_URI that is passed to the Asterisk dialplan.
+
+The dialplan will then use this proper UUID in the path for the AudioSocket(ws://.../${asterisk_call_uuid},cn) call.
+
+Modify audio_processing_service/audio_socket_server.py: The _handle_new_connection method will now parse this proper UUID from the path instead of an integer call_id.
+
+Modify audio_processing_service/audio_socket_handler.py: The constructor and internal logic will use this asterisk_call_uuid for identifying the session with Asterisk. It will need a way to map this back to the internal integer call_id if necessary for DB updates or Redis communication (perhaps by looking it up in the DB on handler initialization).
+
+v12.0:
+
+Major Success (Call Origination & Dialplan): Successfully resolved all issues preventing call origination and internal leg hangup. The full command and control pipeline from the Python application to the target PJSIP phone was functional, with the phone ringing and answering.
+
+Debugging: Corrected Originate command to use Local/s@opendeep-holding-context and then to Local/s@default. Solved AMI variable passing via pipe-separated strings. Resolved Local channel premature hangup with Wait(3600). Fixed PJSIP CONGESTION and NOANSWER statuses.
+
+AMI Event Reception Verified: Successfully added [AMI_CLIENT_EVENT_CATCH_ALL] logging to asterisk_ami_client.py and confirmed that Python is receiving the full stream of AMI events (Newchannel, DialEnd, Hangup, etc.) after the Originate action is sent.
+
+Issue Narrowed: The app_audiosocket.c: Failed to parse UUID error became the sole blocker for WebSocket connection, indicating the issue was with the arguments passed to the AudioSocket() dialplan application.
+
+Dialplan Iteration: Experimented with CHANNEL(audiosocket_options) which failed due to "Unknown or unavailable item requested," leading to the conclusion that res_audiosocket.so might not be loading or the function syntax was incorrect. Reverted to AudioSocket(URI,cn) dialplan application call.
+
+(Older versions summarized for brevity in previous Wayforward versions)
+
+2.3. Core Architecture & Key Decisions
+
+UUID for Asterisk Interaction (Decision from v13.0):
+To ensure compatibility with app_audiosocket and Asterisk's expectations, all calls will generate a standard uuid.uuid4() at the point of origination in CallAttemptHandler.
+
+This UUID will be stored in a new asterisk_call_uuid column in the calls table.
+
+This UUID will be used in the path of the WebSocket URI passed to Asterisk (e.g., ws://host:port/callaudio/<UUID_HERE>).
+
+The Python AudioSocketServer will parse this UUID from the path.
+
+The internal integer call_id from the database will still be used for primary application logic, API lookups, and Redis channel naming. A mapping or lookup will be needed in AudioSocketHandler if it needs to reference the integer call_id.
+
+Dialplan for AudioSocket (Decision from v13.0, based on v12.0 findings):
+The [opendeep-audiosocket-outbound] context in extensions.conf will use the AudioSocket(URI,cn) application before the Dial() command. The URI will include the newly generated asterisk_call_uuid in its path.
+
+[opendeep-audiosocket-outbound]
+exten => s,1,NoOp(=== ... ===)
+   ...
+   same => n,Set(ASTERISK_CALL_UUID=${CUT(OPENDDEEP_VARS,|,1)}) ; Assuming UUID is now the first part
+   same => n,Set(ACTUAL_TARGET_TO_DIAL=${CUT(OPENDDEEP_VARS,|,2)})
+   ...
+   same => n,Answer()
+   same => n,AudioSocket(ws://YOUR_PYTHON_IP:1200/callaudio/${ASTERISK_CALL_UUID},cn)
+   same => n,Dial(${ACTUAL_TARGET_TO_DIAL},30,g)
+   ...
+
+
+(Note: The OPENDDEEP_VARS will need to be updated to pass the asterisk_call_uuid instead of the integer call_id as the first element).
+
+AMI Event-Driven Call Progress (Re-confirmed v12.0):
+The CallAttemptHandler relies on asynchronous AMI events (Newchannel, DialEnd, Hangup, etc.) to track the true status and outcome of a call attempt. The initial response to the Originate AMI action is treated as "fire and forget" (assumed successful if no immediate error) due to the Async: true parameter.
+
+(Other core decisions remain as in previous versions)
+
+3. IMPLEMENTATION & FILE MANIFEST
+3.1. Required Libraries
+
+fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, asterisk-ami==0.1.7, uuid.
+
+3.2. Detailed File Structure & Status
+
+database/schema.sql [Planned Modification] - Add asterisk_call_uuid TEXT UNIQUE to the calls table.
+database/models.py [Planned Modification] - Add asterisk_call_uuid: Optional[str] = None to CallBase, CallCreate, Call.
+database/db_manager.py [Planned Modification] - Update create_call_attempt and update_call_status to handle asterisk_call_uuid.
+call_processor_service/call_attempt_handler.py [Modified] - Corrected Channel in Originate. Reordered AMI listener registration. [Planned Modification] - Generate uuid.uuid4(), store it in DB, and pass it in OPENDDEEP_VARS for the URI.
+call_processor_service/asterisk_ami_client.py [Modified] - Graceful timeout handling for send_action and verbose event logging added.
+audio_processing_service/audio_socket_server.py [Modified] - Added robust error handling and verbose logging. [Planned Modification] - Parse UUID from URI path.
+audio_processing_service/audio_socket_handler.py [Modified] - Added robust error handling and verbose logging. [Planned Modification] - Accept UUID in constructor, potentially map to integer call_id.
+extensions.conf (Asterisk) [Modified] - Uses AudioSocket(URI,cn) before Dial(). [Planned Modification] - Update to parse and use ${ASTERISK_CALL_UUID} in the URI path.
+
+main.py [Modified]
+web_interface/app.py [Modified]
+task_manager/orchestrator_svc.py [Modified]
+task_manager/task_scheduler_svc.py [Modified]
+call_processor_service/call_initiator_svc.py [Modified]
+config/app_config.py [Modified]
+config/prompt_config.py [No Change Expected]
+llm_integrations/openai_form_client.py [Modified]
+llm_integrations/google_gemini_client.py [Created]
+task_manager/ui_assistant_svc.py [Modified]
+tools/information_retriever_svc.py [Modified]
+web_interface/routes_api.py [Modified]
+web_interface/routes_ui.py [Created]
+web_interface/static/css/style.css [Modified]
+web_interface/static/js/main.js [Modified]
+web_interface/templates/index.html [Created]
+common/data_models.py [Modified]
+common/logger_setup.py [Created]
+common/redis_client.py [Created]
+
+[Planned] audio_processing_service/openai_realtime_client.py
+[Planned] post_call_analyzer_service/analysis_svc.py
+[Planned] task_manager/task_lifecycle_manager_svc.py
+[Planned] task_manager/feedback_manager_svc.py
+[Planned] campaign_summarizer_service/*
+
+4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+
+The sole focus of the next session is to implement proper UUID handling to achieve a stable WebSocket connection between Asterisk and the Python AudioSocketServer.
+
+Database Schema Modification (database/schema.sql):
+
+Add the new column asterisk_call_uuid TEXT UNIQUE DEFAULT NULL to the calls table.
+
+Action: Provide the updated schema.sql.
+
+Pydantic Models Update (database/models.py):
+
+Add asterisk_call_uuid: Optional[str] = None to CallBase.
+
+Add asterisk_call_uuid: Optional[str] = None to CallCreate (it will be set by the handler, so optional here).
+
+Ensure Call inherits this.
+
+Action: Provide the updated models.py.
+
+DB Manager Update (database/db_manager.py):
+
+Modify create_call_attempt:
+
+It will now need to accept asterisk_call_uuid as an argument (or this can be set via update_call_status immediately after creation by the handler). For now, let's plan to update it via update_call_status.
+
+The INSERT statement for calls table does not need to change if we use update_call_status.
+
+Modify update_call_status:
+
+Add asterisk_call_uuid: Optional[str] = None as an optional keyword argument.
+
+If asterisk_call_uuid is provided, include it in the UPDATE statement.
+
+Action: Provide the updated db_manager.py.
+
+CallAttemptHandler Logic (call_processor_service/call_attempt_handler.py):
+
+In the _originate_call method:
+
+Import uuid.
+
+Generate asterisk_call_uuid = str(uuid.uuid4()).
+
+Log this UUID.
+
+Update vars_to_pass: The first element should now be asterisk_call_uuid, not self.call_id.
+vars_to_pass = f"{asterisk_call_uuid}|{dial_string_for_dialplan}"
+
+After the Originate action is assumed successful (i.e., response.get("Response") == "Success"), immediately call self._update_call_status_db(self.call_record.status, call_uuid=asterisk_call_uuid) to save the generated UUID to the database for this call attempt. Note: call_uuid is the parameter name in _update_call_status_db that will map to asterisk_call_uuid in the database.
+
+Action: Provide the updated call_attempt_handler.py.
+
+Asterisk Dialplan Update (extensions.conf):
+
+In [opendeep-audiosocket-outbound]:
+
+The Set(CALL_ATTEMPT_ID=...) should now parse the asterisk_call_uuid from OPENDDEEP_VARS. Let's rename the variable in the dialplan for clarity.
+same => n,Set(ASTERISK_CALL_UUID=${CUT(OPENDDEEP_VARS,|,1)})
+
+The AudioSocket line must use this new variable:
+same => n,AudioSocket(ws://YOUR_PYTHON_IP:1200/callaudio/${ASTERISK_CALL_UUID},cn)
+
+Action: Provide the updated [opendeep-audiosocket-outbound] context.
+
+AudioSocketServer and AudioSocketHandler Updates:
+
+audio_processing_service/audio_socket_server.py (_handle_new_connection):
+
+When parsing the path path_segments[-1], this will now be the string UUID. Store it as asterisk_call_uuid_str.
+
+Remove the int() conversion.
+
+Pass this asterisk_call_uuid_str to the AudioSocketHandler constructor instead of the integer call_id.
+
+audio_processing_service/audio_socket_handler.py:
+
+The constructor will now receive asterisk_call_uuid: str. Store this.
+
+For logging, use this asterisk_call_uuid.
+
+Crucially: The handler still needs the integer call_id for database updates (like call status) and Redis channel naming. Upon initialization, the handler must perform a database lookup to find the integer call_id associated with the received asterisk_call_uuid.
+
+Add a new method to db_manager.py: get_call_by_asterisk_uuid(asterisk_uuid: str) -> Optional[Call]:.
+
+The AudioSocketHandler will call this in its __init__ or at the start of handle_frames to get the full Call object, including the integer id. If not found, it should log an error and close the connection.
+
+Action: Provide updated audio_socket_server.py, audio_socket_handler.py, and the new DB manager function.
+
+Testing:
+
+After all changes: Start clean (delete DB, restart Python app, ensure Asterisk dialplan is reloaded/Asterisk restarted).
+
+Trigger a call.
+
+Answer.
+
+Observe Asterisk logs for successful AudioSocket execution (no UUID parse error).
+
+Observe Python logs for connection establishment in AudioSocketServer and frame reception in AudioSocketHandler.
+
+This comprehensive plan directly targets the identified UUID issue and ensures data consistency.

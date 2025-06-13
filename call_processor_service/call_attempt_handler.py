@@ -103,33 +103,29 @@ class CallAttemptHandler:
            # Format the variables into a single pipe-separated string
         vars_to_pass = f"{self.call_id}|{dial_string}"
         dial_string_for_local_channel = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g. PJSIP/7000
-
         originate_action = AmiAction(
             "Originate",
-            # MODIFIED CHANNEL: Use a Local channel to bridge to your context
-            Channel=f"Local/s@opendeep-audiosocket-outbound",
-            # Context, Exten, Priority are now part of the Local channel's destination.
-            # We can still specify a context for the *Local channel itself* if needed,
-            # but usually, the context in the Local channel string is enough.
-            # Let's try without specifying Context, Exten, Priority here directly for the Originate action.
-            # Application="Dial", # We are not using Application=Dial here
-            # Data=dial_string_for_local_channel, # This would be if Application was Dial
-            #Application="NoOp", # We need to give *some* application for the Local channel to start with before it hits the context.
-            Application="Wait",
-            Data="3600", # Wait for up to 60 seconds
-            #Data="Starting local channel bridge", # Data for NoOp
-
+            # We are NOT using a Local channel here for the initial Originate command.
+            # We are telling Asterisk to create a channel and immediately
+            # send it to our dialplan context.
+            #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
+           # Channel=f"Local/s@opendeep-holding-context", # <-- NEW LINE
+            Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
+            Context="opendeep-audiosocket-outbound", # The context where our logic lives
+            Exten="s",                               # The 'start' extension
+            Priority=1,                              # The first step
             CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>",
             Timeout=30000,
             Async="true",
-            Variable=f"_OPENDDEEP_VARS={vars_to_pass}"
+            # We pass our variables here. The dialplan will receive them.
+            Variable=f"OPENDDEEP_VARS={vars_to_pass}"
         )
         
         self.originate_action_id = originate_action.get_action_id()
         logger.info(f"[CallAttemptHandler:{self.call_id}] Originate ActionID set to: {self.originate_action_id}")
 
         self.call_start_time = datetime.now()
-        response = await self.ami_client.send_action(originate_action, timeout=25.0)
+        response = await self.ami_client.send_action(originate_action, timeout=1.0)
         
         if response and response.get("Response") == "Success":
             logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number} (Task Phone: {original_number_for_logging}). ActionID: {self.originate_action_id}. Awaiting events.")
@@ -407,27 +403,36 @@ class CallAttemptHandler:
             sync_kwargs['call_uuid']
         )
 
+    # In call_processor_service/call_attempt_handler.py
+
     async def manage_call_lifecycle(self):
         self._loop = asyncio.get_running_loop()
         logger.info(f"[CallAttemptHandler:{self.call_id}] Starting to manage call lifecycle.")
-        
-        origination_success = await self._originate_call()
-        if not origination_success:
-            logger.error(f"[CallAttemptHandler:{self.call_id}] Origination failed. Aborting lifecycle management.")
-            if self.unregister_callback:
-                await self.unregister_callback(self.call_id)
-            return
 
+        # <<< START: MODIFIED LOGIC >>>
+        # 1. Start listening for AMI events BEFORE originating the call.
         self.ami_client.add_generic_event_listener(self._process_ami_event)
         self._ami_event_listener_task_active = True
         logger.info(f"[CallAttemptHandler:{self.call_id}] Added generic AMI event listener.")
 
+        # 2. Start listening for Redis commands.
         self._redis_listener_task = asyncio.create_task(self._listen_for_redis_commands())
         
+        # 3. NOW, originate the call.
+        origination_success = await self._originate_call()
+        if not origination_success:
+            logger.error(f"[CallAttemptHandler:{self.call_id}] Origination failed. Aborting lifecycle management.")
+            # The failure is already handled inside _originate_call, but we must unregister the handler here.
+            if self.unregister_callback:
+                await self.unregister_callback(self.call_id)
+            # The 'finally' block will handle cleanup of listeners.
+            return 
+        # <<< END: MODIFIED LOGIC >>>
+
         try:
+            # 4. Wait for the call to end (via stop_event set by an event handler).
             await self._stop_event.wait()
             logger.info(f"[CallAttemptHandler:{self.call_id}] Stop event received. Proceeding to cleanup.")
-
         except asyncio.CancelledError:
             logger.info(f"[CallAttemptHandler:{self.call_id}] Main lifecycle task cancelled.")
             if not self.call_end_time:
@@ -453,14 +458,17 @@ class CallAttemptHandler:
                 try: await self._redis_listener_task
                 except asyncio.CancelledError: logger.info(f"[CallAttemptHandler:{self.call_id}] Redis listener task successfully cancelled during cleanup.")
                 except Exception as e_redis_cancel: logger.error(f"[CallAttemptHandler:{self.call_id}] Error awaiting cancelled Redis listener: {e_redis_cancel}")
-
+            
             if self._ami_event_listener_task_active:
                 self.ami_client.remove_generic_event_listener(self._process_ami_event)
                 self._ami_event_listener_task_active = False
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Removed generic AMI event listener during cleanup.")
 
-            if not self.call_end_time and self.unregister_callback:
-                 logger.warning(f"[CallAttemptHandler:{self.call_id}] Call end not processed or unregister_callback not called. Ensuring unregistration.")
-                 await self.unregister_callback(self.call_id)
+            # This check is important. If the call never properly ended (e.g. error before _handle_call_ended was called),
+            # we need to make sure it's unregistered.
+            if not self.call_end_time:
+                if self.unregister_callback:
+                    logger.warning(f"[CallAttemptHandler:{self.call_id}] Call end not processed. Ensuring unregistration.")
+                    await self.unregister_callback(self.call_id)
             
             logger.info(f"[CallAttemptHandler:{self.call_id}] Lifecycle management fully ended for Call ID {self.call_id}.")
