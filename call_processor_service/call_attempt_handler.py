@@ -78,7 +78,7 @@ class CallAttemptHandler:
         full_audiosocket_uri_with_call_id = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}"
         logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_call_id}")
         
-# In call_processor_service/call_attempt_handler.py, inside _originate_call method
+        # In call_processor_service/call_attempt_handler.py, inside _originate_call method
 
         # Determine the channel to originate FROMsend_action
         # This could be a specific local channel if you have one set up for app-originated calls,
@@ -91,26 +91,38 @@ class CallAttemptHandler:
         # For internal calls to another PJSIP endpoint, it's PJSIP/extension_to_dial
         dial_string = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g., PJSIP/7000
 
+        # CRITICAL: This is what executes your dialplan logic
+        application_to_run = "AudioSocket" # Or you can use Dial or another app if you want,
+                                          # but then that app needs to lead to AudioSocket
+
+                   # Define variables for clarity
+        call_attempt_id_var = f"_CALL_ATTEMPT_ID={self.call_id}"
+        target_uri_var = f"_TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id}"
+        actual_dial_var = f"_ACTUAL_TARGET_TO_DIAL={dial_string}"
+           
+           # Format the variables into a single pipe-separated string
+        vars_to_pass = f"{self.call_id}|{dial_string}"
+        dial_string_for_local_channel = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g. PJSIP/7000
+
         originate_action = AmiAction(
             "Originate",
-            Channel=dial_string,                        # Channel to dial (e.g., PJSIP/7000)
-            Context="opendeep-audiosocket-outbound",    # Target the dialplan context
-            Exten="s",                                  # Target the 's' extension in that context
-            Priority=1,                                 # Target priority 1
-            # Application="AudioSocket",                # <<< MUST BE REMOVED
-            # Data=audiosocket_uri,                     # <<< MUST BE REMOVED
+            # MODIFIED CHANNEL: Use a Local channel to bridge to your context
+            Channel=f"Local/s@opendeep-audiosocket-outbound",
+            # Context, Exten, Priority are now part of the Local channel's destination.
+            # We can still specify a context for the *Local channel itself* if needed,
+            # but usually, the context in the Local channel string is enough.
+            # Let's try without specifying Context, Exten, Priority here directly for the Originate action.
+            # Application="Dial", # We are not using Application=Dial here
+            # Data=dial_string_for_local_channel, # This would be if Application was Dial
+            #Application="NoOp", # We need to give *some* application for the Local channel to start with before it hits the context.
+            Application="Wait",
+            Data="3600", # Wait for up to 60 seconds
+            #Data="Starting local channel bridge", # Data for NoOp
+
             CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>",
             Timeout=30000,
             Async="true",
-            Variable=[ # Pass variables as a list for clarity if your AmiAction supports it
-                f"CALL_ATTEMPT_ID={self.call_id}",
-                f"TASK_ID={self.task_id}",              # Good for logging/context in Asterisk
-                f"USER_ID={self.task_user_id}",          # Good for logging/context in Asterisk
-                f"TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id}" # Crucial for the dialplan
-            ]
-            # If your AmiAction expects variables as a single comma-separated string:
-            # Variable=f"CALL_ATTEMPT_ID={self.call_id},TASK_ID={self.task_id},USER_ID={self.task_user_id},TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id.replace(',', '\\,')}"
-            # Note: If the URI itself could contain commas, you'd need to escape them if passing as a single string. List is safer.
+            Variable=f"_OPENDDEEP_VARS={vars_to_pass}"
         )
         
         self.originate_action_id = originate_action.get_action_id()
