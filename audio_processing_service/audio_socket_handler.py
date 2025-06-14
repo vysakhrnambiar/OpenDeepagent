@@ -205,7 +205,7 @@ class AudioSocketHandler:
 
                 # Generate complete test tone first
                 sample_rate = 8000
-                frequency = 440 # A4 note
+                frequency = 550 # A4 note
                 duration_ms_per_chunk = 20
                 num_samples_per_chunk = int(sample_rate * duration_ms_per_chunk / 1000)
                 num_test_frames = 50  # Send for 1 second
