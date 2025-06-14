@@ -223,19 +223,21 @@ class AudioSocketHandler:
                     async with test_tone_lock:
                         test_tone_buffer.extend(tone_chunk)
 
-                # Save test tone to WAV for verification
+                # Save a copy of test tone to WAV for verification
                 test_tone_wav_path = Path(_project_root) / "recordings" / f"test_tone_{self.call_id}.wav"
                 try:
+                    # Make a copy of the buffer for saving
+                    test_tone_copy = test_tone_buffer.copy()
                     with wave.open(str(test_tone_wav_path), 'wb') as wav_file:
                         wav_file.setnchannels(1)  # Mono audio
                         wav_file.setsampwidth(2)  # 2 bytes per sample (16-bit PCM)
                         wav_file.setframerate(sample_rate)  # 8kHz sample rate
-                        wav_file.writeframes(test_tone_buffer)
+                        wav_file.writeframes(test_tone_copy)
                     logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Saved test tone to {test_tone_wav_path}")
                 except Exception as e_wav:
                     logger.error(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Error saving test tone WAV: {e_wav}")
 
-                # Send the test tone using buffered approach
+                # Send the original test tone using buffered approach
                 while len(test_tone_buffer) > 0 and not self._stop_event.is_set():
                     chunk_to_send = None
                     async with test_tone_lock:
