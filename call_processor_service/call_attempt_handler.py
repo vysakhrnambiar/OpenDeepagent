@@ -1,6 +1,7 @@
 # call_processor_service/call_attempt_handler.py
 
 import asyncio
+import uuid
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -47,6 +48,8 @@ class CallAttemptHandler:
         self.call_answer_time: Optional[datetime] = None
         self.call_end_time: Optional[datetime] = None
 
+        self.asterisk_call_specific_uuid: Optional[str] = None # Will hold the UUID for AudioSocket path
+
         self._stop_event = asyncio.Event()
         self._redis_listener_task: Optional[asyncio.Task] = None
         self._ami_event_listener_task_active = False
@@ -73,10 +76,13 @@ class CallAttemptHandler:
 
         channel_to_dial = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{app_config.DEFAULT_CALLER_ID_EXTEN}/{target_phone_number}"
         #dial_string = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" 
-        
+        self.asterisk_call_specific_uuid = str(uuid.uuid4()) # Generate and store the UUID
+        logger.info(f"[CallAttemptHandler:{self.call_id}] Generated Asterisk-specific UUID for AudioSocket: {self.asterisk_call_specific_uuid}")
         # This is the CRITICAL CHANGE: The Data field for AudioSocket
-        full_audiosocket_uri_with_call_id = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}"
-        logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_call_id}")
+        #full_audiosocket_uri_with_call_id = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}"
+        #logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_call_id}")
+        full_audiosocket_uri_with_uuid = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.asterisk_call_specific_uuid}"
+        logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_uuid}")
         
         # In call_processor_service/call_attempt_handler.py, inside _originate_call method
 
@@ -90,19 +96,24 @@ class CallAttemptHandler:
         # This is usually just the technology and the number for external calls.
         # For internal calls to another PJSIP endpoint, it's PJSIP/extension_to_dial
         dial_string = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g., PJSIP/7000
-
+        dial_string_for_dialplan = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" 
         # CRITICAL: This is what executes your dialplan logic
         application_to_run = "AudioSocket" # Or you can use Dial or another app if you want,
                                           # but then that app needs to lead to AudioSocket
 
+
+        
+        vars_to_pass = f"{self.asterisk_call_specific_uuid}|{dial_string_for_dialplan}"
+        
+
                    # Define variables for clarity
-        call_attempt_id_var = f"_CALL_ATTEMPT_ID={self.call_id}"
-        target_uri_var = f"_TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id}"
-        actual_dial_var = f"_ACTUAL_TARGET_TO_DIAL={dial_string}"
+        #call_attempt_id_var = f"_CALL_ATTEMPT_ID={self.call_id}"
+        #target_uri_var = f"_TARGET_AUDIOSOCKET_URI={full_audiosocket_uri_with_call_id}"
+        #actual_dial_var = f"_ACTUAL_TARGET_TO_DIAL={dial_string}"
            
            # Format the variables into a single pipe-separated string
-        vars_to_pass = f"{self.call_id}|{dial_string}"
-        dial_string_for_local_channel = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g. PJSIP/7000
+        #vars_to_pass = f"{self.call_id}|{dial_string}"
+        #dial_string_for_local_channel = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g. PJSIP/7000
         originate_action = AmiAction(
             "Originate",
             # We are NOT using a Local channel here for the initial Originate command.
@@ -110,8 +121,10 @@ class CallAttemptHandler:
             # send it to our dialplan context.
             #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
            # Channel=f"Local/s@opendeep-holding-context", # <-- NEW LINE
-            Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
-            Context="opendeep-audiosocket-outbound", # The context where our logic lives
+            #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
+            Channel=f"Local/s@opendeep-ai-leg",
+            #Context="opendeep-audiosocket-outbound", # The context where our logic lives
+            Context="opendeep-human-leg",  
             Exten="s",                               # The 'start' extension
             Priority=1,                              # The first step
             CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>",
@@ -128,8 +141,10 @@ class CallAttemptHandler:
         response = await self.ami_client.send_action(originate_action, timeout=1.0)
         
         if response and response.get("Response") == "Success":
-            logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number} (Task Phone: {original_number_for_logging}). ActionID: {self.originate_action_id}. Awaiting events.")
-            await self._update_call_status_db(CallStatus.ORIGINATING)
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number}. ActionID: {self.originate_action_id}. Awaiting events.")
+            # Save the generated asterisk_call_specific_uuid to the database
+            # The `call_uuid` parameter in _update_call_status_db maps to the 'call_uuid' column in the DB
+            await self._update_call_status_db(CallStatus.ORIGINATING, call_uuid=self.asterisk_call_specific_uuid) # Store the new UUID
             return True
         else:
             err_msg = response.get('Message', 'Unknown error') if response else "No response from AMI client"
@@ -192,163 +207,161 @@ class CallAttemptHandler:
             logger.info(f"[CallAttemptHandler:{self.call_id}] Redis listener stopped for channel {redis_channel_pattern}.")
 
     async def _process_ami_event(self, event: Dict[str, Any]):
-        """Processes an AMI event. This is registered as a generic listener with ami_client."""
         if self._loop is None: self._loop = asyncio.get_running_loop()
-        
+
         event_name = event.get("Event")
-        unique_id = event.get("UniqueID")
-        linked_id = event.get("Linkedid", unique_id)
-        channel = event.get("Channel")
         action_id_in_event = event.get("ActionID")
-        
-        # --- Initial Correlation & UniqueID/Channel Discovery ---
-        if not self.asterisk_unique_id:
-            is_related_to_our_originate = (action_id_in_event and self.originate_action_id and action_id_in_event == self.originate_action_id)
-            call_attempt_id_var = event.get("CALL_ATTEMPT_ID", event.get("call_attempt_id")) # Check for our custom variable
-            is_our_call_attempt_var = (call_attempt_id_var == str(self.call_id))
+        unique_id_from_event = event.get("UniqueID")
+        linked_id_from_event = event.get("Linkedid")
+        channel_from_event = event.get("Channel")
 
-            potential_discovery_events = ["Newchannel", "VarSet", "OriginateResponse", "Dial", "DialBegin", "DialState", "BridgeEnter"]
-            if unique_id and event_name in potential_discovery_events:
-                if is_related_to_our_originate or is_our_call_attempt_var:
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Captured Asterisk UniqueID: {unique_id} and Channel: {channel} from event {event_name} linked to our call attempt.")
-                    self.asterisk_unique_id = unique_id
-                    if channel: self.asterisk_channel_name = channel
+        # --- Phase 1: Initial Discovery of self.asterisk_unique_id (Asterisk's internal channel ID) ---
+        if not self.asterisk_unique_id: # If we haven't identified the main Asterisk UniqueID for this call yet
+            is_related_to_our_originate = (action_id_in_event and 
+                                           self.originate_action_id and 
+                                           action_id_in_event == self.originate_action_id)
+
+            # Mechanism 1: ActionID matching (primary for early events like OriginateResponse, Newchannel for Local/...)
+            if is_related_to_our_originate and unique_id_from_event and event_name in ["Newchannel", "OriginateResponse", "Dial", "DialBegin"]: # Added Dial/DialBegin
+                self.asterisk_unique_id = unique_id_from_event
+                if channel_from_event: self.asterisk_channel_name = channel_from_event
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Discovered Asterisk internal UniqueID: {self.asterisk_unique_id} via ActionID match on event {event_name}. Channel: {self.asterisk_channel_name}")
+                # Update DB status or channel info. Storing the channel is useful.
+                # The call_uuid passed here is self.asterisk_call_specific_uuid (our generated one for audiosocket path)
+                # which should have been saved to DB right after sending Originate.
+                await self._update_call_status_db(self.call_record.status, asterisk_channel=self.asterisk_channel_name, call_uuid=self.asterisk_call_specific_uuid)
+                # No return here, fall through to Phase 2 to process THIS event too.
+
+            # Mechanism 2: Custom Channel Variable matching from VarSet event
+            elif event_name == "VarSet":
+                variable_name_from_event = event.get("Variable")
+                value_from_event = event.get("Value")
+                # Ensure dialplan variable name matches "_OPENDDEEP_CALL_UUID"
+                if (variable_name_from_event and 
+                    variable_name_from_event.upper() == "_OPENDDEEP_CALL_UUID" and 
+                    value_from_event == self.asterisk_call_specific_uuid and # Compare with our generated UUID
+                    unique_id_from_event):
                     
-                    await self._update_call_status_db(self.call_record.status, # Keep current status
-                                                      asterisk_channel=self.asterisk_channel_name,
-                                                      call_uuid=self.asterisk_unique_id)
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Our Call UniqueID is now: {self.asterisk_unique_id}, Channel: {self.asterisk_channel_name}")
+                    self.asterisk_unique_id = unique_id_from_event
+                    if channel_from_event: self.asterisk_channel_name = channel_from_event
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Discovered Asterisk internal UniqueID: {self.asterisk_unique_id} via VarSet for _OPENDDEEP_CALL_UUID. Channel: {self.asterisk_channel_name}")
+                    await self._update_call_status_db(self.call_record.status, asterisk_channel=self.asterisk_channel_name, call_uuid=self.asterisk_call_specific_uuid)
+                    # No return here, fall through to Phase 2.
             
-            elif is_related_to_our_originate:
-                logger.debug(f"[CallAttemptHandler:{self.call_id}] Received event {event_name} related to our Originate ActionID {self.originate_action_id}, but no UniqueID yet. Event: {event}")
-                return
-            else: # Event not yet correlated
+            # Handle OriginateResponse Failure specifically if it's for our ActionID
+            elif is_related_to_our_originate and event_name == "OriginateResponse" and event.get("Response") == "Failure":
+                reason = event.get('Reason', 'Unknown reason')
+                logger.error(f"[CallAttemptHandler:{self.call_id}] OriginateResponse indicates failure (ActionID: {action_id_in_event}): {reason}")
+                await self._handle_call_ended(
+                    hangup_cause=f"OriginateResponse Failure: {reason}",
+                    call_conclusion="Origination failed at Asterisk AMI level.",
+                    final_status=CallStatus.FAILED_ASTERISK_ERROR
+                )
+                return # Call definitely ended or failed to start.
+
+            else: # Event is not yet correlated or doesn't provide the UniqueID.
+                logger.debug(f"[CallAttemptHandler:{self.call_id}] Event {event_name} (ActionID: {action_id_in_event}, UID: {unique_id_from_event}) not yet correlated or not providing initial Asterisk UniqueID.")
                 return
 
-        # --- Filtering for known UniqueID ---
-        if self.asterisk_unique_id:
-            relevant_to_us = False
-            if unique_id == self.asterisk_unique_id: relevant_to_us = True
-            elif linked_id == self.asterisk_unique_id: relevant_to_us = True
-            elif channel and self.asterisk_channel_name and channel.startswith(self.asterisk_channel_name.split('-')[0]):
-                 relevant_to_us = True
-
-            if not relevant_to_us:
-                # logger.debug(f"[CallAttemptHandler:{self.call_id}] Ignoring event for different UniqueID/Channel: EventUID='{unique_id}', EventChan='{channel}' vs OurUID='{self.asterisk_unique_id}', OurChan='{self.asterisk_channel_name}'")
-                return
-        elif not self.originate_action_id: # Should not happen if _originate_call was successful
-            logger.warning(f"[CallAttemptHandler:{self.call_id}] No Asterisk UniqueID and no Originate ActionID known. Cannot process event: {event_name}")
+        # --- Phase 2: Processing events for an already identified call ---
+        # If self.asterisk_unique_id is still None here, it means initial discovery failed for this event.
+        if not self.asterisk_unique_id:
+            logger.debug(f"[CallAttemptHandler:{self.call_id}] No Asterisk UniqueID established for event {event_name}. Ignoring.")
             return
 
+        # Check if the current event is relevant to our call using the established self.asterisk_unique_id
+        is_relevant = False
+        if unique_id_from_event == self.asterisk_unique_id: is_relevant = True
+        elif linked_id_from_event == self.asterisk_unique_id: is_relevant = True
+        # A more robust channel name check might be needed if channel names are very dynamic
+        # For now, UniqueID and LinkedID are primary.
 
-        logger.info(f"[CallAttemptHandler:{self.call_id}] Processing relevant AMI Event: {event_name}, UniqueID: {unique_id}, LinkedID: {linked_id}, Channel: {channel}, ActionID: {action_id_in_event}")
+        if not is_relevant:
+            # logger.debug(f"[CallAttemptHandler:{self.call_id}] Event {event_name} (UID: {unique_id_from_event}, LinkedID: {linked_id_from_event}) not relevant to our call (OurAstUID: {self.asterisk_unique_id}).")
+            return
 
-        # --- Specific Event Handling (Restored fuller structure) ---
+        # If relevant, proceed with specific event handling:
+        logger.info(f"[CallAttemptHandler:{self.call_id}] Processing relevant AMI Event: {event_name} for our call (OurAstUID: {self.asterisk_unique_id}) EventDetails: { {k:v for k,v in event.items() if k not in ['Privilege']} }")
+
         if event_name == "Newchannel":
-            if unique_id == self.asterisk_unique_id: # Make sure this Newchannel event is for OUR channel
-                if not self.asterisk_channel_name and channel:
-                    self.asterisk_channel_name = channel
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Newchannel. Updated Channel: {channel} for UniqueID: {unique_id}")
-                    await self._loop.run_in_executor(None, db_manager.update_call_status, self.call_id, self.call_record.status, None, None, None, channel, None)
-                current_status = self.call_record.status
-                if current_status not in [CallStatus.DIALING, CallStatus.RINGING, CallStatus.ANSWERED]:
-                    await self._update_call_status_db(CallStatus.DIALING)
-
-        elif event_name == "VarSet":
-            # Check if this VarSet is for our CALL_ATTEMPT_ID variable
-            if event.get("Variable", "").upper() == "CALL_ATTEMPT_ID" and event.get("Value") == str(self.call_id):
-                if not self.asterisk_unique_id and unique_id: # If we haven't captured UniqueID yet
-                    self.asterisk_unique_id = unique_id
-                    if channel and not self.asterisk_channel_name: self.asterisk_channel_name = channel
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Captured Asterisk UniqueID via VarSet for CALL_ATTEMPT_ID: {unique_id}, Channel: {channel}")
-                    await self._update_call_status_db(self.call_record.status, asterisk_channel=channel, call_uuid=unique_id)
-            # Other VarSet events can be logged or handled if needed
-            # logger.debug(f"[CallAttemptHandler:{self.call_id}] VarSet event: {event}")
-
-
-        elif event_name == "Dial": # Dial event family (DialBegin, DialState, DialEnd)
-            # This event is complex and can have SubEvents like Begin, End, State.
-            # The UniqueID in a Dial event usually refers to the originating channel.
-            # The DestUniqueID refers to the channel being dialed.
-            sub_event = event.get("SubEvent")
-            dial_status = event.get("DialStatus") # Present in DialEnd
-            dest_unique_id = event.get("DestUniqueID")
-
-            if sub_event == "Begin":
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Begin. Channel: {event.get('Channel')}, DestChannel: {event.get('DestChannel')}, DestUniqueID: {dest_unique_id}")
-                # Potentially update status to ringing if not already
-                if self.call_record.status not in [CallStatus.RINGING, CallStatus.ANSWERED]: # If not already ringing or answered
-                     await self._update_call_status_db(CallStatus.RINGING)
+            # This might be for a secondary channel leg (e.g., the one actually dialing out after Local channel)
+            # If this new channel's UniqueID IS our self.asterisk_unique_id, it means we've just identified it.
+            # If it's a *different* UniqueID but *Linked* to ours, it's also relevant.
+            # The self.asterisk_channel_name should ideally be the primary channel we are tracking.
+            if not self.asterisk_channel_name and channel_from_event and unique_id_from_event == self.asterisk_unique_id:
+                self.asterisk_channel_name = channel_from_event
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Updated/Confirmed Channel: {self.asterisk_channel_name} for our main Asterisk UniqueID: {self.asterisk_unique_id}")
+                await self._update_call_status_db(self.call_record.status, asterisk_channel=self.asterisk_channel_name)
             
-            elif sub_event == "End":
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial End. Channel: {event.get('Channel')}, DestChannel: {event.get('DestChannel')}, DialStatus: {dial_status}")
-                if dial_status == "ANSWER":
+            current_db_status = self.call_record.status # Use the live status from self.call_record
+            if current_db_status not in [CallStatus.DIALING, CallStatus.RINGING, CallStatus.ANSWERED, CallStatus.LIVE_AI_HANDLING]:
+                await self._update_call_status_db(CallStatus.DIALING)
+
+        elif event_name == "Dial": # Covers DialBegin, DialState, DialEnd via SubEvent
+            sub_event = event.get("SubEvent")
+            dial_status_from_event = event.get("DialStatus") # Typically in DialEnd or just Dial if SubEvent isn't used by lib
+            dest_channel = event.get("DestChannel")
+
+            if sub_event == "Begin" or (event_name == "DialBegin"): # Handle DialBegin too
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Begin to DestChannel: {dest_channel} (DestUID: {event.get('DestUniqueID')})")
+                if self.call_record.status not in [CallStatus.RINGING, CallStatus.ANSWERED, CallStatus.LIVE_AI_HANDLING]:
+                    await self._update_call_status_db(CallStatus.RINGING)
+            
+            # If 'Dial' event itself contains DialStatus (some AMI libraries might do this)
+            elif not sub_event and dial_status_from_event: # Plain 'Dial' event with DialStatus
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Event. DestChannel: {dest_channel}, DialStatus: {dial_status_from_event}")
+                if dial_status_from_event == "ANSWER":
+                     if not self.call_answer_time: self.call_answer_time = datetime.now()
+                     logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (Dial:ANSWER).")
+                     await self._update_call_status_db(CallStatus.ANSWERED)
+                # ... (handle other dial_status_from_event like NOANSWER, BUSY etc. as below)
+
+            elif sub_event == "End" or (event_name == "DialEnd"): # Handle DialEnd too
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial End. DestChannel: {dest_channel}, DialStatus: {dial_status_from_event}")
+                if dial_status_from_event == "ANSWER":
                     if not self.call_answer_time: self.call_answer_time = datetime.now()
                     logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (DialEnd:ANSWER).")
                     await self._update_call_status_db(CallStatus.ANSWERED)
-                    # AudioSocketHandler will update to LIVE_AI_HANDLING later
-                elif dial_status in ["NOANSWER", "CANCEL", "DONTCALL", "TORTURE"]: # Added more failure statuses
-                    await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status}", call_conclusion="No effective answer", final_status=CallStatus.FAILED_NO_ANSWER)
-                elif dial_status == "BUSY":
+                elif dial_status_from_event in ["NOANSWER", "CANCEL", "DONTCALL", "TORTURE"]:
+                    await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="No effective answer", final_status=CallStatus.FAILED_NO_ANSWER)
+                elif dial_status_from_event == "BUSY":
                     await self._handle_call_ended(hangup_cause="DialEnd: BUSY", call_conclusion="Line busy", final_status=CallStatus.FAILED_BUSY)
-                elif dial_status == "CONGESTION":
-                     await self._handle_call_ended(hangup_cause="DialEnd: CONGESTION", call_conclusion="Network congestion", final_status=CallStatus.FAILED_CONGESTION)
-                elif dial_status in ["CHANUNAVAIL", "INVALIDARGS"]: # Channel unavailable or other setup issue
-                     await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status}", call_conclusion="Channel/config issue", final_status=CallStatus.FAILED_CHANNEL_UNAVAILABLE)
-            
-            # elif sub_event == "State": # Can provide intermediate state like "Ring", "Ringing"
-                # dial_state = event.get("DialState")
-                # logger.debug(f"[CallAttemptHandler:{self.call_id}] Dial State: {dial_state} for DestChannel: {event.get('DestChannel')}")
-                # if dial_state in ["RING", "RINGING"] and self.call_record.status != CallStatus.RINGING:
-                    # await self._update_call_status_db(CallStatus.RINGING)
-
-
+                elif dial_status_from_event == "CONGESTION":
+                    await self._handle_call_ended(hangup_cause="DialEnd: CONGESTION", call_conclusion="Network congestion", final_status=CallStatus.FAILED_CONGESTION)
+                elif dial_status_from_event in ["CHANUNAVAIL", "INVALIDARGS"]:
+                    await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="Channel/config issue", final_status=CallStatus.FAILED_CHANNEL_UNAVAILABLE)
+        
         elif event_name == "Hangup":
-            hangup_cause_code = event.get("Cause", "0") 
+            if self.call_end_time: # Already handled
+                return
+            hangup_cause_code = event.get("Cause", "0")
             hangup_cause_txt = event.get("Cause-txt", f"Unknown (Code: {hangup_cause_code})")
-            logger.info(f"[CallAttemptHandler:{self.call_id}] Hangup event for UniqueID {unique_id}. Cause: {hangup_cause_txt} (Code: {hangup_cause_code})")
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Hangup event for UniqueID {unique_id_from_event}. Cause: {hangup_cause_txt} (Code: {hangup_cause_code})")
             
             final_status = CallStatus.COMPLETED_SYSTEM_HANGUP 
             if hangup_cause_code == "16": # Normal Clearing
                 call_db_record = await self._loop.run_in_executor(None, db_manager.get_call_by_id, self.call_id)
-                if call_db_record and call_db_record.status in [CallStatus.COMPLETED_AI_OBJECTIVE_MET, CallStatus.COMPLETED_AI_HANGUP]:
-                    final_status = call_db_record.status
-                else:
-                    final_status = CallStatus.COMPLETED_USER_HANGUP 
+                if call_db_record:
+                    if call_db_record.status in [CallStatus.COMPLETED_AI_OBJECTIVE_MET, CallStatus.COMPLETED_AI_HANGUP]:
+                        final_status = call_db_record.status
+                    else: # If AI hasn't marked it as completed, assume user hangup or system cleanup
+                        final_status = CallStatus.COMPLETED_USER_HANGUP
             elif hangup_cause_code == "17": final_status = CallStatus.FAILED_BUSY
             elif hangup_cause_code == "1": final_status = CallStatus.FAILED_INVALID_NUMBER
-            # Add more cause code mappings as needed
             
-            await self._handle_call_ended(hangup_cause=f"{hangup_cause_txt} (Code: {hangup_cause_code})",
-                                          call_conclusion=f"Call ended by Hangup event: {hangup_cause_txt}",
-                                          final_status=final_status)
-        
-        elif event_name == "OriginateResponse": # If the AMI library emits this as a discrete event
-            # This event directly responds to an Originate action.
-            # It should contain the ActionID of the Originate request.
-            # It might also provide UniqueID and Channel if the origination is proceeding.
-            logger.info(f"[CallAttemptHandler:{self.call_id}] Received OriginateResponse: {event}")
-            if event.get("Response") == "Failure":
-                logger.error(f"[CallAttemptHandler:{self.call_id}] OriginateResponse indicates failure: {event.get('Reason')}")
-                await self._handle_call_ended(
-                    hangup_cause=f"OriginateResponse Failure: {event.get('Reason', 'Unknown')}",
-                    call_conclusion="Origination failed as per Asterisk response.",
-                    final_status=CallStatus.FAILED_ASTERISK_ERROR
-                )
-            # If success, UniqueID/Channel might be here or will come in Newchannel.
+            await self._handle_call_ended(
+                hangup_cause=f"{hangup_cause_txt} (Code: {hangup_cause_code})",
+                call_conclusion=f"Call ended by Hangup event: {hangup_cause_txt}",
+                final_status=final_status
+            )
 
-        elif event_name == "BridgeEnter":
-            # Indicates a channel has entered a bridge. Useful for tracking call progress.
-            logger.info(f"[CallAttemptHandler:{self.call_id}] BridgeEnter event: Channel {channel} (UniqueID {unique_id}) entered bridge {event.get('BridgeUniqueid')}")
-            # If this is our main channel and it enters a bridge with the dialed party, call is truly connected.
-            # Status should likely already be ANSWERED from Dial event.
+        elif event_name == "BridgeEnter": # Or just "Bridge" with SubEvent "Enter"
+            bridge_unique_id = event.get("BridgeUniqueid")
+            logger.info(f"[CallAttemptHandler:{self.call_id}] BridgeEnter event: Channel {channel_from_event} (OurAstUID: {self.asterisk_unique_id}) entered bridge {bridge_unique_id}. Type: {event.get('BridgeType')}")
+            # If the call was just answered, and now enters a bridge, this firms up the "answered" state.
+            # Often, AudioSocket connection implies the media path is ready.
 
-        elif event_name == "BridgeLeave":
-            logger.info(f"[CallAttemptHandler:{self.call_id}] BridgeLeave event: Channel {channel} (UniqueID {unique_id}) left bridge {event.get('BridgeUniqueid')}")
-
-        # --- Placeholder for other events if needed ---
-        # elif event_name == "SomeOtherEvent":
-        #     logger.debug(f"[CallAttemptHandler:{self.call_id}] Received SomeOtherEvent: {event}")
+        # Other events like BridgeLeave, etc., can be added as needed.
 
     async def _handle_call_ended(self, hangup_cause: str, call_conclusion: str, final_status: CallStatus):
         if self._loop is None: self._loop = asyncio.get_running_loop()

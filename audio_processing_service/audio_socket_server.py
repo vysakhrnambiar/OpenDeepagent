@@ -23,105 +23,47 @@ class AudioSocketServer:
         self._server: asyncio.AbstractServer | None = None
         logger.info(f"AudioSocketServer initialized to listen on {self.host}:{self.port}")
 
+       # In class AudioSocketServer:
     async def _handle_new_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """
-        Callback for new asyncio stream connections.
-        This will delegate to AudioSocketHandler.
-        """
         peername = writer.get_extra_info('peername')
-        logger.info(f"[AudioSocketServer] New connection from {peername}")
+        logger.info(f"[AudioSocketServer-TCP] New TCP connection from {peername}")
         
-        # <<< START: ADDED COMPREHENSIVE ERROR HANDLING AND LOGGING >>>
+        # For raw TCP, we don't get the UUID from an HTTP path.
+        # The AudioSocketHandler will be responsible for reading the initial TYPE_UUID frame
+        # from Asterisk to get the asterisk_call_uuid.
+
+        # We still need a way to pass the RedisClient to the handler.
+        # The handler will determine the call_id and asterisk_call_uuid after reading the first frame.
+
         try:
-            # --- Extract call_id from the WebSocket request path ---
-            # Asterisk's audiosocket.c sends a "GET <path> HTTP/1.1" handshake.
-            # We need to read this initial handshake to extract the path.
-            
-            http_request_line_bytes = b''
-            try:
-                # Read the first line of the HTTP request (e.g., "GET /callaudio/123 HTTP/1.1\r\n")
-                http_request_line_bytes = await asyncio.wait_for(reader.readuntil(b'\r\n'), timeout=5.0)
-                http_request_line = http_request_line_bytes.decode('utf-8').strip()
-                logger.debug(f"[AudioSocketServer] Received initial HTTP line: {http_request_line}")
-                
-                # Read and discard headers until an empty line is found
-                while True:
-                    header_line_bytes = await asyncio.wait_for(reader.readuntil(b'\r\n'), timeout=2.0)
-                    if header_line_bytes == b'\r\n': # Empty line indicates end of headers
-                        break
-                    logger.debug(f"[AudioSocketServer] Discarding header: {header_line_bytes.decode('utf-8').strip()}")
-
-            except asyncio.TimeoutError:
-                logger.warning(f"[AudioSocketServer] Timeout during handshake with {peername}. Closing connection.")
-                if writer and not writer.is_closing():
-                    writer.close()
-                    await writer.wait_closed()
-                return
-            except (asyncio.IncompleteReadError, ConnectionResetError) as e:
-                logger.warning(f"[AudioSocketServer] Connection error during handshake with {peername}: {e}. Closing connection.")
-                # Writer is likely already closed, but we ensure it.
-                if writer and not writer.is_closing():
-                    writer.close()
-                    await writer.wait_closed()
-                return
-
-            parts = http_request_line.split()
-            if len(parts) < 2 or not parts[0] == "GET":
-                logger.error(f"[AudioSocketServer] Invalid HTTP request line from {peername}: {http_request_line}")
-                writer.close()
-                await writer.wait_closed()
-                return
-
-            path = parts[1] # e.g., /callaudio/123
-            path_segments = path.strip("/").split("/") # e.g., ['callaudio', '123']
-            
-            if len(path_segments) < 2 or path_segments[0] != "callaudio":
-                logger.error(f"[AudioSocketServer] Invalid path from {peername}: {path}. Expected /callaudio/<call_id>")
-                error_response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                writer.write(error_response)
-                await writer.drain()
-                writer.close()
-                await writer.wait_closed()
-                return
-
-            call_id_str = path_segments[-1]
-            try:
-                call_id = int(call_id_str)
-            except ValueError:
-                logger.error(f"[AudioSocketServer] Could not parse call_id '{call_id_str}' from path {path} for {peername}")
-                error_response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                writer.write(error_response)
-                await writer.drain()
-                writer.close()
-                await writer.wait_closed()
-                return
-
-            logger.info(f"[AudioSocketServer] Extracted Call ID: {call_id} for connection from {peername}")
-
-            # Send WebSocket upgrade success response (minimal for Asterisk AudioSocket)
-            ws_accept_response = (
-                b"HTTP/1.1 101 Switching Protocols\r\n"
-                b"Upgrade: websocket\r\n"
-                b"Connection: Upgrade\r\n"
-                b"\r\n"
+            logger.info(f"[AudioSocketServer-TCP] Creating AudioSocketHandler for TCP connection from {peername}.")
+            # Pass reader, writer, and redis_client.
+            # The handler will resolve call_id and asterisk_call_uuid itself.
+            handler = AudioSocketHandler(
+                reader=reader, 
+                writer=writer, 
+                redis_client=self.redis_client, 
+                peername=peername
+                # call_id and asterisk_call_uuid will be determined by the handler
             )
-            writer.write(ws_accept_response)
-            await writer.drain()
-            logger.info(f"[AudioSocketServer] Sent WebSocket handshake response to {peername} for Call ID {call_id}")
+            logger.info(f"[AudioSocketServer-TCP] Handing off TCP connection from {peername} to handler.")
+            await handler.handle_frames()
 
-            # Now that handshake is "complete", create and run the handler
-            logger.info(f"[AudioSocketServer] Creating AudioSocketHandler for Call ID {call_id}...")
-            handler = AudioSocketHandler(reader, writer, call_id, self.redis_client, peername)
-            logger.info(f"[AudioSocketServer] Handing off connection for Call ID {call_id} to handler.")
-            await handler.handle_frames() # This is the main loop for the handler
-
+        except ConnectionResetError:
+            logger.warning(f"[AudioSocketServer-TCP] Connection reset by peer {peername} during initial handling or handler execution.")
+        except BrokenPipeError:
+             logger.warning(f"[AudioSocketServer-TCP] Broken pipe with peer {peername}, likely client closed connection abruptly.")
         except Exception as e:
-            logger.error(f"[AudioSocketServer] CRITICAL UNHANDLED ERROR in _handle_new_connection from {peername}: {e}", exc_info=True)
-            if writer and not writer.is_closing():
-                writer.close()
-                await writer.wait_closed()
-        # <<< END: ADDED COMPREHENSIVE ERROR HANDLING AND LOGGING >>>
-
+            logger.error(f"[AudioSocketServer-TCP] CRITICAL UNHANDLED ERROR for connection from {peername}: {e}", exc_info=True)
+        finally:
+            if writer and not writer.is_closing(): # Ensure writer is closed if an error occurred before handler took full control or if handler failed early
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception as e_close:
+                    logger.error(f"[AudioSocketServer-TCP] Error closing writer for peer {peername} in finally: {e_close}")
+            logger.info(f"[AudioSocketServer-TCP] Finished handling/cleanup for connection from {peername}.")
+   
     async def start(self):
         if self._server_task and not self._server_task.done():
             logger.warning("[AudioSocketServer] Server is already running.")

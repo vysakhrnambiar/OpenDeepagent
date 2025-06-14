@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS calls (
     status TEXT DEFAULT 'pending_initiation',
     asterisk_channel TEXT,
     call_uuid TEXT UNIQUE,
+    asterisk_call_uuid TEXT UNIQUE DEFAULT NULL, -- Explicitly adding for clarity, though call_uuid could be repurposed. Let's keep call_uuid as it is and add the new one for Asterisk specific UUID for now. The Wayforward planned to use call_uuid for the Asterisk UUID. I will stick to the plan and use call_uuid for the Asterisk specific UUID for now, and rename it if we find it confusing later. Let's assume 'call_uuid' in the schema IS the asterisk_call_uuid for now, as per the Wayforward's note "call_uuid is the parameter name in _update_call_status_db that will map to asterisk_call_uuid in the database."
     prompt_used TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

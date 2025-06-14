@@ -29,615 +29,300 @@ Generate a New Version: Your final output for the request must be a single, comp
 
 ### 2.1. Version & Status
 
-Project Version: 11.0
-
-Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks, with capabilities for Human-in-the-Loop (HITL) feedback.
-
-Current Development Phase:
-- Phase 1 (UI Foundation): Complete.
-- Phase 1.5 (Fixes & Search Tool): Complete.
-- Phase 1.6 (Authoritative Business Search & API Integration): Complete.
-- Phase 2a (LLM Campaign Orchestration - UI Button & Backend Service): Complete.
-- Phase 2b (Task Execution Engine): OrchestratorService successfully creates campaigns and tasks. TaskSchedulerService initializes and polls. CallInitiatorService and CallAttemptHandler structures are in place. AMI client connects.
-
-Current Focus: Debugging why `TaskSchedulerService` is not picking up newly created (and presumably due) tasks from the database, despite successful task creation by `OrchestratorService`.
-
-Next Major Architectural Step: Achieving the first successful call origination via the integrated services chain, then integrating the AudioSocket service.
-
-### 2.2. Changelog / Revision History
-
-v11.0 (Current Version):
-- **Success (Campaign & Task Creation):** Resolved `NameError` (typo `master_agent_promt`) and `ValidationError` (missing `user_id` in `TaskCreate`) in `OrchestratorService`. Campaigns and tasks are now successfully created in the database when triggered from the UI via `/api/execute_campaign`.
-- **Success (Lifespan Manager):** Implemented FastAPI `lifespan` manager in `web_interface/app.py` (calling lifecycle functions from `main.py`), resolving the duplicate service initialization issue caused by Uvicorn's reloader. Services now start cleanly once.
-- **Bug (Task Not Picked Up):** `TaskSchedulerService` is polling but consistently reports "No due tasks found" even after tasks are confirmed to be created in the `tasks` table with `status='pending'` and a recent `next_action_time`.
-- **Debugging Focus:** Added detailed logging to `db_manager.get_due_tasks` to trace query execution, parameters, fetched rows, and Pydantic parsing.
-- **Schema Fix (DND List):** Identified and corrected a missing `user_id` column in the `dnd_list` table schema (`database/schema.sql`) and instructed for DB re-initialization. This was a prior error source during `TaskSchedulerService` processing.
-- **Async Call Pattern Refinement:** Clarified and applied `await` vs. `await loop.run_in_executor()` for `db_manager` functions based on their `def` vs `async def` signatures in `CallInitiatorService` and `CallAttemptHandler`. (Still verifying the exact state of `db_manager.py` for final confirmation).
-- **AMI Client:** `AsteriskAmiClient` connects and logs in successfully. A brief ping failure was observed but the client attempted recovery.
-
-v10.0:
-- Major Success (AMI Client Refactor): Successfully refactored `AsteriskAmiClient` to use `asterisk-ami==0.1.7`, enabling reliable AMI connection, login, action sending, and event dispatch.
-- Debugging: Resolved numerous errors during AMI client refactoring.
-- File Updates: call_processor_service/asterisk_ami_client.py significantly refactored and verified as working standalone.
-- Clarification: Confirmed the nature of asterisk-ami==0.1.7 and its API patterns.
-
-v9.0:
-- Architecture Decision (AMI Client): Decided to pursue Option 2 for AMI handling: a centralized py-asterisk client running in a dedicated OS thread, with an async wrapper for the rest of the application. This change will be implemented in a subsequent phase after attempting to resolve the current login issue with the custom AsteriskAmiClient or making one final focused debugging pass on it.
-- Debugging Focus: Identified that the current AMI login failure with the custom AsteriskAmiClient is not due to Asterisk server-side configuration (manager.conf, users, permits) or credentials, as confirmed by a successful manual Telnet AMI login test using the same credentials and from the same application server IP. The issue lies within the Python AsteriskAmiClient's implementation or its interaction with asyncio streams during the login sequence.
-- Clarification (WebSockets & Threads): Confirmed that WebSockets for audio (Asterisk AudioSocket to app, app to OpenAI Realtime Voice/TTS) will be handled by asyncio tasks within the main event loop, not dedicated OS threads per WebSocket. The only dedicated OS thread under consideration is for wrapping the synchronous py-asterisk library.
-- File Updates:
-  - database/models.py: Added app_config import to resolve NameError.
-  - call_processor_service/asterisk_ami_client.py: Added datetime and uuid imports to resolve NameError in AmiAction.
-  - main.py: Added typing.Optional import. Noted on_event deprecation for future refactoring to lifespan events.
-- Test Mode: Confirmed implementation details for "Test Mode" (redirecting calls to a specific number, forcing sequential execution) involving app_config settings and logic in CallInitiatorService and CallAttemptHandler. Noted .env variables needed for this.
-
-v8.0:
-- Feature Started (Phase 2b): Created initial structure for task_manager/task_scheduler_svc.py.
-- Meta-Instruction Added: Permanent rule for AI to avoid changing fixed component names.
-
-v7.0:
-- Architecture: Detailed TaskLifecycleManagerService. Solidified multi-tenancy. Refined call concurrency understanding. Clarified DND responsibility.
-- Architecture: Detailed the "Meta-OODA" agent, now named TaskLifecycleManagerService. Confirmed it will be a dedicated, LLM-driven service responsible for strategic oversight of all tasks (short and long-running), dynamic determination of task nature, proactive user check-ins for long tasks, and ensuring no collisions with PostCallAnalyzerService.
-- Architecture: Solidified the pervasive multi-tenancy design principle. All new services, database queries, and LLM interactions must be strictly scoped by user_id to ensure data isolation.
-- Architecture: Refined the understanding of call concurrency. CallInitiatorService enforces MAX_CONCURRENT_CALLS by managing how many CallAttemptHandler tasks are active. Each live call will have an AudioSocketHandler (spawned by AudioSocketServer upon Asterisk connection) and a corresponding CallAttemptHandler (managing AMI commands via Redis).
-- Architecture: Clarified that DND list checks are the responsibility of the TaskSchedulerService (pre-call) and PostCallAnalyzerService (post-call update). "OODA" does not refer to DND.
-- Planning: Confirmed that task prioritization will be a future enhancement involving database schema changes and logic updates in the TaskSchedulerService and OrchestratorService.
-
-v6.0:
-- Feature Complete (Phase 2a): Successfully implemented the OrchestratorService and the /api/execute_campaign endpoint. The "Confirm and Schedule Campaign" button now creates campaign and task records.
-- Fixes: Resolved multiple TypeErrors, AttributeErrors, and NameErrors across UIAssistantService, OpenAIFormClient, and OrchestratorService related to function arguments, method existence, and imports. Corrected logic in get_authoritative_business_info to use direct HTTP calls.
-- Architecture: Initial detailed planning for Human-in-the-Loop (HITL) feedback. Clarified distinct roles of Orchestrator, Scheduler, and Post-Call Analyzer.
-
-v5.0:
-- Fix: Resolved persistent 403 Forbidden errors from Google Cloud APIs by consolidating to a single project.
-- Upgrade: Migrated from legacy googlemaps library to modern Places API (New) via direct HTTP requests.
-- Enhancement: Added "Feedback Loop" instruction to UI_ASSISTANT_SYSTEM_PROMPT.
-- Enhancement: Implemented _is_plan_valid validation check in UIAssistantService.
-
-v4.0:
-- Feature: Implemented get_authoritative_business_info tool using Google Places API.
-- Refactor: Updated UIAssistantService to support multiple tools.
-- Dependency: Added googlemaps library (later replaced).
-
-v3.0:
-- Meta: Re-architected this Wayforward.md file to be a comprehensive, self-sustaining context document.
-
-v2.0:
-- Feature: Implemented generic search_internet tool for broader information queries.
-- Refactor: Updated ui_assistant_svc.py with robust tool-calling loop.
-- Refactor: Created information_retriever_svc.py and google_gemini_client.py.
-- Fix: Resolved ModuleNotFoundError for google.generativeai with correct pip install.
-
-v1.0:
-- Fix: Corrected non-functional "Submit Answers" button in frontend form.
-- Fix: Resolved username editing issue, allowing editing until first message is sent.
-- Fix: Corrected CSS/HTML layout issues, restoring single-centered chat window.
-- Feature: Built initial conversational UI with default username.
-- Core: Established base project structure, database schema, and FastAPI application.
-
-### 2.3. Core Architecture & Key Decisions
-
-Stability Mandate: Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
-
-Lifespan Management (Decision from v11.0): FastAPI's `lifespan` context manager is now used for application startup and shutdown, providing a more robust way to manage background service initialization and termination compared to `on_event` decorators, especially with Uvicorn's reloader.
-
-Database Schema (`tasks` and `dnd_list` tables - v11.0):
-- `tasks` table schema confirmed to require `user_id`.
-- `dnd_list` table schema updated to include `user_id` and a `UNIQUE(user_id, phone_number)` constraint to support per-user DND lists.
-
-Async DB Calls (Ongoing Refinement - v11.0): The pattern for calling `db_manager.py` functions from `async` services is:
-- If `db_manager.func()` is `def` (synchronous): use `await loop.run_in_executor(None, db_manager.func, ...)`
-- If `db_manager.func()` is `async def` (asynchronous wrapper or true async): use `await db_manager.func(...)`
-This is being applied consistently across services.
-
-AMI Client Implementation (Decision from v10.0, superseding v9.0 plan):
-- The system now uses a refactored AsteriskAmiClient that wraps the asterisk-ami==0.1.7 library.
-- This client runs the synchronous asterisk-ami.AMIClient in a dedicated OS worker thread.
-- It uses thread-safe queues for actions and asyncio.Future (internally, via the library's FutureResponse) for responses, bridged to the main asyncio loop.
-- Events from the library are passed via call_soon_threadsafe to an async dispatcher.
-- This approach leverages a working, albeit simpler, external AMI library and avoids the complexities of a fully custom asyncio AMI protocol implementation for now.
-
-Audio WebSockets (Decision from v9.0):
-- Incoming audio connections from Asterisk (via AudioSocket) and outgoing connections to OpenAI Realtime Voice (and any other TTS services) will be handled by native asyncio libraries (e.g., websockets).
-- Each live call's audio stream will be managed by an asyncio task (e.g., an AudioSocketHandler instance) without requiring a dedicated OS thread per WebSocket.
-
-Multi-Tenancy: Foundational principle. Data isolation via user_id in DB tables and service logic. LLM context scoped by user_id. User-specific DND lists.
-
-Separation of Concerns & Control Flow for Calls:
-- TaskSchedulerService (asyncio task): Polls DB, DND checks, hands to CallInitiatorService.
-- CallInitiatorService (asyncio methods, called by Scheduler): Manages MAX_CONCURRENT_CALLS, creates calls DB record, spawns/starts CallAttemptHandler.
-- CallAttemptHandler (asyncio task, one per call attempt):
-  - Manages AMI interaction for one call via the chosen AMI client strategy.
-  - Instructs Asterisk to connect audio to AudioSocketServer.
-  - Listens for commands from AudioSocketHandler via Redis.
-  - Updates calls DB. Notifies CallInitiatorService on completion.
-- AudioSocketServer (asyncio task): Listens for AudioSocket connections from Asterisk.
-- AudioSocketHandler (asyncio task, one per live audio stream): Bridges audio between Asterisk and OpenAI. Publishes control commands to Redis.
-- PostCallAnalyzerService & TaskLifecycleManagerService: As previously defined.
-
-Separation of Concerns (Orchestrator, Scheduler, Analyzer):
-- Orchestrator (OrchestratorService): A one-time setup agent that takes the UI's final campaign_plan and creates database records. Once complete, its job is done for that plan.
-- Scheduler (TaskSchedulerService): A persistent, long-running background process that polls for due tasks and initiates call attempts.
-- Post-Call Analyzer (AnalysisService): A decision-making agent that analyzes call outcomes and determines next steps.
-
-Human-in-the-Loop (HITL) Feedback:
-- Allows the Live Call AI to request immediate feedback from the UI user during active calls.
-- Involves a request_user_feedback tool, WebSocket bridge, feedback_requests table, and enhancements to call handling components.
-
-TaskLifecycleManagerService (Meta-OODA Agent): Proactive & Strategic. LLM-driven.
-- Oversees all tasks for all users (respecting user_id scoping).
-- Monitors task queues, progress of long-running tasks, identifies stuck tasks.
-- Dynamically determines task nature (long/short running).
-- Decides on strategic adjustments (dynamic prioritization, prompt revisions, placing tasks on hold).
-- Manages inter-call context for long-lived/phased tasks.
-- Initiates proactive user check-ins for long-running tasks via UI.
-- Acts by updating DB records, influencing the TaskSchedulerService.
-
-Tool-Augmented AI:
-- UIAssistantService uses a two-step tool-calling loop for factual queries.
-- Specialized tools include get_authoritative_business_info for business data and search_internet for general information.
-
-Modern API Usage:
-- Deliberate use of Google Places API (New) via direct HTTP requests for reliability and future-proofing.
-
-Task vs. Call Distinction:
-- A Task is the overall objective defined by the user (e.g., "book a dentist appointment").
-- A Call is an individual attempt to complete a Task. A single Task may involve multiple Call attempts.
-- SQLite schema reflects this with tasks and calls tables.
-
-Development & Testing Strategies:
-- Test Mode:
-  - Activated by APP_TEST_MODE=True in .env.
-  - All outbound calls redirected to APP_TEST_MODE_REDIRECT_NUMBER (e.g., "7000").
-  - MAX_CONCURRENT_CALLS forced to 1 by CallInitiatorService.
-  - Implemented by logic in CallInitiatorService (concurrency) and CallAttemptHandler (number redirection during Originate).
-- Iterative Testing: Aim for basic operational testing of components as they are integrated, before moving too many steps ahead, to catch issues early.
-
-Resilience and Error Handling:
-- Handles unexpected call drops by logging errors and setting tasks for analysis.
-- Implements retry logic with backoff for transient issues.
-- Gracefully handles service failures across DB, Redis, and OpenAI dependencies.
-
-Future Improvements Noted:
-- Refactor FastAPI on_event("startup") and on_event("shutdown") to use modern "lifespan" events.
-- Transition database/db_manager.py to use a fully asynchronous database library (e.g., aiosqlite) for improved performance under high concurrency.
-- Implement global DND based on a threshold of user-specific DNDs.
-- Implement richer user profiles to enhance AI contextual awareness.
-
-## 3. IMPLEMENTATION & FILE MANIFEST
-
-### 3.1. Required Libraries
-fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, asterisk-ami==0.1.7.
-
-### 3.2. Detailed File Structure & Status
-
-**main.py** [Modified] - Defines service lifecycle functions (`actual_start_services`, `actual_shutdown_services`), initializes logger. Uvicorn runs `web_interface.app:app`.
-
-**web_interface/app.py** [Modified] - Defines FastAPI `app` instance, now uses the `lifespan` context manager which calls lifecycle functions from `main.py`.
-
-**database/schema.sql** [Modified] - Added `user_id` to `tasks` and `dnd_list` tables. Added `UNIQUE` constraint to `dnd_list`.
-
-**database/db_manager.py** [Modified] - Contains DB interaction logic. Added detailed logging to `get_due_tasks`. (Its `def` vs `async def` status for various functions is key for current debugging).
-
-**task_manager/orchestrator_svc.py** [Modified] - Successfully creates campaigns and tasks. Corrected `TaskCreate` instantiation (added `user_id`) and a typo. Prompting for LLM tool use refined.
-
-**task_manager/task_scheduler_svc.py** [Modified] - Correctly uses `run_in_executor` for synchronous `db_manager` calls (`get_due_tasks`, `is_on_dnd_list`). Currently reports "No due tasks found."
-
-**call_processor_service/call_initiator_svc.py** [Modified] - Adjusted to correctly `await` or use `run_in_executor` for `db_manager` calls based on their assumed signatures.
-
-**call_processor_service/call_attempt_handler.py** [Modified] - Adjusted to correctly `await` or use `run_in_executor` for `db_manager` calls based on their assumed signatures. (Full logic for `_process_ami_event` needs to be consistently maintained and verified).
-
-**call_processor_service/asterisk_ami_client.py** [Modified] - Core AMI client using `asterisk-ami`. Connects successfully.
-
-config/app_config.py [Modified] - Contains all configuration keys including DB, Redis, OpenAI, and GOOGLE_API_KEY. Added APP_TEST_MODE, APP_TEST_MODE_REDIRECT_NUMBER.
-
-config/prompt_config.py [Modified] - Defines system prompts with tool usage rules and feedback loops. ORCHESTRATOR_SYSTEM_PROMPT refined.
-
-database/models.py [Modified] - Pydantic models reflecting the database schema. Added TaskStatus, CallStatus enums. user_id in TaskBase, DNDEntryBase. CallCreate model. app_config import added.
-
-llm_integrations/openai_form_client.py [Modified] - Client for OpenAI with tools support.
-
-llm_integrations/google_gemini_client.py [Created] - Client for Google Gemini with search grounding.
-
-task_manager/ui_assistant_svc.py [Modified] - Implements the tool-calling loop for the chat interface.
-
-tools/information_retriever_svc.py [Modified] - Defines search tools for business and general information.
-
-web_interface/routes_api.py [Modified] - API endpoints for chat and campaign execution.
-
-web_interface/routes_ui.py [Created] - Serves HTML templates.
-
-web_interface/static/css/style.css [Modified] - UI styling.
-
-web_interface/static/js/main.js [Modified] - Frontend logic including campaign confirmation.
-
-web_interface/templates/index.html [Created] - Main chat interface.
-
-common/data_models.py [Modified] - API request/response models.
-
-common/logger_setup.py [Created] - Centralized logging.
-
-common/redis_client.py [Created] - Redis Pub/Sub interface.
-
-[Planned] audio_processing_service/audio_socket_server.py - Listens for Asterisk AudioSocket connections.
-
-[Planned] audio_processing_service/audio_socket_handler.py - Handles one audio stream, bridges to OpenAIRealtimeClient.
-
-[Planned] audio_processing_service/openai_realtime_client.py - Wrapper for OpenAI Realtime Voice.
-
-[Planned] post_call_analyzer_service/analysis_svc.py - Call outcome analysis.
-
-[Planned] task_manager/task_lifecycle_manager_svc.py - The "Meta-OODA" agent for strategic task oversight.
-
-[Planned] task_manager/feedback_manager_svc.py - HITL feedback system.
-
-[Planned] campaign_summarizer_service/* - Final report generation.
-
-## 4. IMMEDIATE NEXT STEPS (ACTION PLAN)
-
-The immediate priority is to diagnose why `TaskSchedulerService` is not finding the newly created tasks, even though `OrchestratorService` confirms their creation in the database.
-
-1. **Verify Database State After Task Creation:**
-   * After the UI flow creates a campaign and `/api/execute_campaign` returns a success (200 OK), manually inspect the `tasks` table in `test_opendeep.db` (or your DB file).
-   * **Query:** `SELECT id, campaign_id, user_id, status, next_action_time, typeof(next_action_time), current_attempt_count, max_attempts FROM tasks WHERE campaign_id = <the_new_campaign_id>;`
-   * **Confirm:**
-     * A task record exists for the new campaign.
-     * `status` is 'pending'.
-     * `next_action_time` is a valid recent timestamp string (e.g., "2025-06-11 HH:MM:SS.ffffff").
-     * `typeof(next_action_time)` is 'text'.
-     * `current_attempt_count` is 0.
-     * `max_attempts` is your default (e.g., 3).
-     * `user_id` is correct.
-
-2. **Analyze Detailed Logs from `db_manager.get_due_tasks`:**
-   * Ensure the detailed logging (query, params, fetched rows count, parsing success/errors) added previously to `db_manager.get_due_tasks` is active.
-   * After creating a task via the UI, observe the application logs during the next poll cycle of `TaskSchedulerService`.
-   * **Focus on these log lines from `get_due_tasks`:**
-     * `DEBUG - db_manager.py: ... - get_due_tasks: Executing query: ... with params: ...` (Verify the query and that 'pending' is in the status params).
-     * `DEBUG - db_manager.py: ... - get_due_tasks: Fetched X raw rows from DB.` (If X is 0, the SQL query itself is the primary issue. If X is 1 (or more), the issue is in subsequent Python processing within `get_due_tasks`).
-     * If rows are fetched, any Pydantic parsing logs (`Successfully parsed task ID...` or `Error parsing row...`).
-
-3. **Review `db_manager.get_due_tasks` SQL Query Conditions:**
-   Based on the logs from step 2, re-evaluate each part of the `WHERE` clause against the confirmed data in the `tasks` table (from step 1).
-   * `status IN ('pending', 'retry_scheduled', 'on_hold')` (or similar)
-   * `(next_action_time IS NULL OR next_action_time <= CURRENT_TIMESTAMP)`
-   * `current_attempt_count < max_attempts`
-
-4. **If SQL returns 0 rows (but task exists and *should* match):**
-   * Consider subtle issues with SQLite's `CURRENT_TIMESTAMP` vs. the stored text timestamp. Temporarily simplify the `next_action_time` condition in `get_due_tasks` to just `(next_action_time IS NOT NULL)` or even remove it entirely for one test run to see if tasks are then picked up (this would isolate the time comparison as the problem).
-   * Ensure `datetime` objects are being stored in a consistent ISO8601 format that SQLite's date/time functions can compare correctly with `CURRENT_TIMESTAMP` if direct string comparison isn't working as expected. SQLite usually handles standard ISO8601 strings well.
-
-Once `TaskSchedulerService` successfully picks up a task:
-* The logs should show it being passed to `CallInitiatorService`.
-* `CallInitiatorService` should spawn `CallAttemptHandler`.
-* `CallAttemptHandler` should use `AsteriskAmiClient` to send an `Originate` action.
-* Asterisk CLI should show the call attempt, and your test extension should ring.
-
-This systematic debugging of `get_due_tasks` is the critical path to unblocking call origination.
-
-
-Of course. This is a huge milestone. The phone ringing means the entire chain of command from Python -> AMI -> Asterisk Dialplan -> PJSIP is working perfectly. We have successfully solved the origination and variable-passing problem.
-
-The two new issues ("no sound" and "websocket server stopped") are the expected next layer of problems, and they are much easier to solve now that the call is connecting.
-
-Here is the updated Wayforward document. It captures our success, identifies the new issues, and sets a clear plan for our next session.
-
-OpenDeep - Master Project State & Forward Plan
-1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
-
-(Your Role as the AI Assistant)
-Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
-
-(Your Core Task: The Update-Generate Loop)
-When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
-
-Ingest Context: Read and fully comprehend two sources of information:
-
-This ENTIRE Wayforward.md document (from version 1.0 to the current state).
-
-The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
-
-Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
-
-Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
-
-(Strict Rules for Regeneration - CRITICAL)
-
-RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
-
-INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
-
-PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
-
-MAINTAIN STABILITY (User Instruction): Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
-
-UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
-
-INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
-
-DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
-
-2. PROJECT OVERVIEW & CURRENT STATE
-2.1. Version & Status
-
-Project Version: 12.0
-
-Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks.
-
-Current Development Phase: Phase 2b (Task Execution Engine).
-
-Current Focus: Debugging the AudioSocketServer crash on connection and resolving the one-way/no-way audio (RTP) issue.
-
-Next Major Architectural Step: Stabilize the full audio path from the PJSIP phone through Asterisk to the Python WebSocket server, then integrate real-time AI processing.
-
-2.2. Changelog / Revision History
-
-v12.0 (Current Version):
-
-Major Success (Call Origination): Successfully resolved all issues preventing call origination. The full command and control pipeline from the Python application to the target PJSIP phone is now functional.
-
-Debugging Journey & Fixes:
-
-Corrected Originate command to use Local channels to properly execute dialplan logic.
-
-Solved AMI variable passing by using a single pipe-separated (|) string and parsing it in the dialplan with CUT(), after determining the asterisk-ami library mishandled list-based variables.
-
-Resolved the Local channel premature hangup issue by changing the Originate Application from NoOp to Wait(3600), ensuring the channel stays alive for the duration of the call.
-
-Fixed PJSIP CONGESTION status by correctly linking the endpoint to its aors in pjsip.conf.
-
-Fixed PJSIP NOANSWER status by enabling qualify_frequency on the AOR to ensure the endpoint was Avail.
-
-Fixed the final PJSIP CONGESTION status by diagnosing and correcting the UDP/TCP transport mismatch between the endpoint configuration and the phone's registration.
-
-New Issues Identified:
-
-The Python AudioSocketServer process crashes or stops when Asterisk attempts to connect to it.
-
-The answered call has no audio ("dead air").
-
-v11.0:
-
-Success (Task Creation): Resolved NameError and ValidationError in OrchestratorService, enabling successful task creation from the UI.
-
-Success (Lifespan): Implemented FastAPI lifespan manager, fixing duplicate service initialization.
-
-Bug Identified: TaskSchedulerService was not picking up due tasks.
-
-v10.0:
-
-Major Success (AMI Client): Successfully refactored AsteriskAmiClient to use the asterisk-ami library, enabling reliable AMI connection and login.
-
-(Older versions summarized for brevity)
-
-2.3. Core Architecture & Key Decisions
-
-AMI Variable Passing Strategy (Decision from v11.0): Initial attempts to pass variables as a list using _ and __ prefixes failed due to suspected issues in the asterisk-ami library's handling of the Variable key. The only successful and robust method found was to combine all necessary variables into a single pipe-separated (|) string, pass it as a single AMI variable (e.g., _OPENDDEEP_VARS), and parse this string within the Asterisk dialplan using the CUT() function. This minimizes the risk of library misinterpretation.
-
-Local Channel Origination (Decision from v11.0): To execute dialplan logic (like AudioSocket) on an originated call, the Local channel is used. The Originate Application is set to Wait with a long timeout (e.g., 3600) to keep the primary channel leg alive while the secondary leg executes the main dialplan logic, including Dial and other applications.
-
-(Other core decisions remain as in previous versions)
-
-3. IMPLEMENTATION & FILE MANIFEST
-3.1. Required Libraries
-
-fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, asterisk-ami==0.1.7.
-
-3.2. Detailed File Structure & Status
-
-call_processor_service/call_attempt_handler.py [Heavily Modified] - Contains the now working Originate logic using the Local channel and pipe-separated variables.
-
-pjsip.conf / Asterisk Dialplan [Heavily Modified] - Dialplan now correctly parses variables from AMI and contains the full logic to Dial and then run AudioSocket. PJSIP endpoint configured for NAT and correct transport.
-
-audio_processing_service/audio_socket_server.py [Created] - The WebSocket server that listens for connections from Asterisk. This is the next primary debugging target.
-
-audio_processing_service/audio_socket_handler.py [Created] - The handler for individual WebSocket connections. Also a primary debugging target.
-
-(Other files have not been changed in this session).
-
-4. IMMEDIATE NEXT STEPS (ACTION PLAN)
-
-Our next session will focus on two parallel streams to solve the two new problems. The top priority is to stabilize the WebSocket server.
-
-Priority 1: Debug the AudioSocketServer Crash
-
-The server stopping indicates an unhandled exception. We need to find it.
-
-Add Robust Exception Logging: We will add comprehensive try...except blocks around the key operational areas of the audio_processing_service to catch and log any and all exceptions.
-
-In audio_socket_server.py: Wrap the entire body of the _handle_new_connection method in a try...except Exception as e: block. Log the exception with full traceback (exc_info=True).
-
-In audio_socket_handler.py: Wrap the entire body of the handle_frames method in a try...except Exception as e: block and log with traceback.
-
-Verify Handshake Logic: The crash likely happens during the initial WebSocket upgrade handshake. We will add verbose logging to _handle_new_connection to trace its progress:
-
-Log upon receiving a new connection.
-
-Log the raw HTTP request line it reads from the StreamReader.
-
-Log the parsed call_id.
-
-Log right before it sends the 101 Switching Protocols response.
-
-Log right after it successfully creates the AudioSocketHandler instance.
-
-Goal: To see the exact error and traceback that causes the server/handler to crash. This will tell us if it's an issue with parsing, IO, or something else.
-
-Priority 2: Diagnose the "No Audio" (RTP) Issue
-
-This is an Asterisk-level problem, likely related to media (RTP) flow with the Local channel.
-
-Enable RTP Debugging: In the Asterisk CLI, before placing the call, we will run rtp set debug on.
-
-Place the Call and Answer: Trigger the call from Python and answer it on your Linphone.
-
-Analyze RTP Logs: The Asterisk CLI will now show RTP packet information.
-
-We need to see if RTP packets are flowing from your phone (192.168.1.59) to Asterisk (192.168.1.24) when you speak.
-
-We need to see if Asterisk is trying to send RTP packets (even if they are silent packets from the AudioSocket app) to your phone.
-
-Check NAT & directmedia: We have direct_media=no on the endpoint, which is correct. This forces audio through Asterisk. The rtp set debug on will confirm if Asterisk is correctly handling the media paths between the PJSIP/7000 channel and the Local channel where the AudioSocket application is running. It's possible the audio bridge between the two legs of the Local channel is not being established correctly.
-
-By tackling these two issues simultaneously, we can stabilize the entire call path and have a working end-to-end connection with a live audio stream ready for AI integration.
-
-You've got it. Your understanding is perfect, and your plan to integrate a proper UUID is exactly right. We'll use the database call_id for our internal application logic and the generated UUID for all Asterisk interactions related to a specific call leg.
-
-Here is the updated Wayforward.md incorporating this as the next crucial step. I've also made sure to update the status of the files we've worked on and capture the key decisions from this session.
-
-OpenDeep - Master Project State & Forward Plan
-1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
-
-(Your Role as the AI Assistant)
-Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
-
-(Your Core Task: The Update-Generate Loop)
-When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
-
-Ingest Context: Read and fully comprehend two sources of information:
-
-This ENTIRE Wayforward.md document (from version 1.0 to the current state).
-
-The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
-
-Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
-
-Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
-
-(Strict Rules for Regeneration - CRITICAL)
-
-RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
-
-INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
-
-PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
-
-MAINTAIN STABILITY (User Instruction): Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
-
-UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
-
-INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
-
-DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
-
-2. PROJECT OVERVIEW & CURRENT STATE
-2.1. Version & Status
-
 Project Version: 13.0
 
 Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks.
 
-Current Development Phase: Phase 2b (Task Execution Engine & Audio Path).
+Current Development Phase: Phase 2b (Task Execution Engine & Audio Path)
 
 Current Focus: Implementing proper UUID handling for Asterisk interactions to resolve the app_audiosocket "Failed to parse UUID" error and achieve a stable WebSocket connection for audio.
 
 Next Major Architectural Step: Establish a stable, bi-directional audio stream between the softphone, Asterisk, and the Python AudioSocketHandler. Then, integrate AI audio processing.
 
-2.2. Changelog / Revision History
+### 2.2. Changelog / Revision History
 
 v13.0 (Current Version):
-
-Critical Insight: Identified that app_audiosocket.c in Asterisk, when invoked as a dialplan application AudioSocket(URI,options), was still erroring with "Failed to parse UUID" because the URI was being misinterpreted as the first argument, which it expected to be a UUID. This occurred even with the corrected dialplan syntax AudioSocket(ws://...,cn).
-
-Root Cause Diagnosis: The actual root cause is that app_audiosocket (when used in this specific dialplan application form: AudioSocket(URI,cn)) expects the URI's path component (e.g., /callaudio/THIS_PART) to be a standard UUID if the URI is the first argument. Our database call_id (an integer) was being used here, causing the parse failure.
-
-Architecture Decision (UUID for Asterisk): Decided to generate a standard UUID (using Python's uuid.uuid4()) in CallAttemptHandler specifically for Asterisk's consumption. This UUID will be passed in the WebSocket URI path. The database call_id (integer) will remain the primary key for internal application logic.
-
-Database Modification Required: The calls table will need a new asterisk_call_uuid (TEXT, UNIQUE) column to store this generated UUID.
-
-Code Modification Path:
-
-Modify database/schema.sql to add the asterisk_call_uuid column to the calls table.
-
-Modify database/models.py (CallBase, CallCreate, Call) to include asterisk_call_uuid.
-
-Modify database/db_manager.py (create_call_attempt, update_call_status, etc.) to handle the new asterisk_call_uuid field.
-
-Modify call_processor_service/call_attempt_handler.py:
-
-Generate a uuid.uuid4() when a call is initiated.
-
-Store this UUID in the new asterisk_call_uuid field of the calls DB record.
-
-Use this asterisk_call_uuid in the FULL_AUDIOSOCKET_URI that is passed to the Asterisk dialplan.
-
-The dialplan will then use this proper UUID in the path for the AudioSocket(ws://.../${asterisk_call_uuid},cn) call.
-
-Modify audio_processing_service/audio_socket_server.py: The _handle_new_connection method will now parse this proper UUID from the path instead of an integer call_id.
-
-Modify audio_processing_service/audio_socket_handler.py: The constructor and internal logic will use this asterisk_call_uuid for identifying the session with Asterisk. It will need a way to map this back to the internal integer call_id if necessary for DB updates or Redis communication (perhaps by looking it up in the DB on handler initialization).
+- Critical Insight: Identified that app_audiosocket.c in Asterisk requires a standard UUID in the URI path
+- Root Cause Diagnosis: The AudioSocket application expects a valid UUID when used as AudioSocket(URI,cn)
+- Architecture Decision: Will generate UUID (uuid.uuid4()) in CallAttemptHandler for Asterisk's consumption
+- Database Modification: Added asterisk_call_uuid (TEXT, UNIQUE) column to calls table
+- Code Modifications: Updated multiple components to handle the new UUID system
 
 v12.0:
+- Major Success: Resolved call origination issues, achieved working command and control pipeline
+- Fixed: Originate command, AMI variable passing, Local channel hangup, PJSIP issues
+- Added: AMI event reception verification and logging
+- Issue Identified: app_audiosocket.c UUID parsing error
 
-Major Success (Call Origination & Dialplan): Successfully resolved all issues preventing call origination and internal leg hangup. The full command and control pipeline from the Python application to the target PJSIP phone was functional, with the phone ringing and answering.
+v11.0:
+- Success: Fixed task creation and service initialization issues
+- Implemented: FastAPI lifespan manager
+- Bug Identified: TaskSchedulerService task pickup issue
 
-Debugging: Corrected Originate command to use Local/s@opendeep-holding-context and then to Local/s@default. Solved AMI variable passing via pipe-separated strings. Resolved Local channel premature hangup with Wait(3600). Fixed PJSIP CONGESTION and NOANSWER statuses.
+v10.0:
+- Major Success: Refactored AsteriskAmiClient using asterisk-ami library
+- Achieved: Reliable AMI connection and login
 
-AMI Event Reception Verified: Successfully added [AMI_CLIENT_EVENT_CATCH_ALL] logging to asterisk_ami_client.py and confirmed that Python is receiving the full stream of AMI events (Newchannel, DialEnd, Hangup, etc.) after the Originate action is sent.
+v9.0:
+- Architecture Decision: Centralized AMI client approach
+- Clarified: WebSocket and threading architecture
 
-Issue Narrowed: The app_audiosocket.c: Failed to parse UUID error became the sole blocker for WebSocket connection, indicating the issue was with the arguments passed to the AudioSocket() dialplan application.
+v8.0:
+- Feature Started: Initial task_manager/task_scheduler_svc.py structure
+- Added: Meta-instruction for fixed component names
 
-Dialplan Iteration: Experimented with CHANNEL(audiosocket_options) which failed due to "Unknown or unavailable item requested," leading to the conclusion that res_audiosocket.so might not be loading or the function syntax was incorrect. Reverted to AudioSocket(URI,cn) dialplan application call.
+v7.0:
+- Architecture: Detailed TaskLifecycleManagerService
+- Refined: Multi-tenancy and call concurrency understanding
 
-(Older versions summarized for brevity in previous Wayforward versions)
+v6.0:
+- Feature Complete: OrchestratorService and campaign execution
+- Architecture: Initial HITL feedback planning
 
-2.3. Core Architecture & Key Decisions
+v5.0:
+- Fixed: Google Cloud API issues
+- Upgraded: Places API implementation
 
-UUID for Asterisk Interaction (Decision from v13.0):
-To ensure compatibility with app_audiosocket and Asterisk's expectations, all calls will generate a standard uuid.uuid4() at the point of origination in CallAttemptHandler.
+v4.0:
+- Feature: Implemented authoritative business info tool
+- Refactor: Enhanced UIAssistantService
 
-This UUID will be stored in a new asterisk_call_uuid column in the calls table.
+v3.0:
+- Meta: Restructured Wayforward.md format
 
-This UUID will be used in the path of the WebSocket URI passed to Asterisk (e.g., ws://host:port/callaudio/<UUID_HERE>).
+v2.0:
+- Feature: Added internet search tool
+- Refactor: Enhanced tool-calling system
 
-The Python AudioSocketServer will parse this UUID from the path.
+v1.0:
+- Initial: Base project structure and UI implementation
 
-The internal integer call_id from the database will still be used for primary application logic, API lookups, and Redis channel naming. A mapping or lookup will be needed in AudioSocketHandler if it needs to reference the integer call_id.
+### 2.3. Core Architecture & Key Decisions
 
-Dialplan for AudioSocket (Decision from v13.0, based on v12.0 findings):
-The [opendeep-audiosocket-outbound] context in extensions.conf will use the AudioSocket(URI,cn) application before the Dial() command. The URI will include the newly generated asterisk_call_uuid in its path.
+UUID for Asterisk Interaction (v13.0):
+- Generate standard uuid.uuid4() at call origination
+- Store in asterisk_call_uuid column (calls table)
+- Use in WebSocket URI path for Asterisk
+- Map between UUID and internal call_id as needed
 
+Dialplan for AudioSocket (v13.0):
+```
 [opendeep-audiosocket-outbound]
 exten => s,1,NoOp(=== ... ===)
-   ...
-   same => n,Set(ASTERISK_CALL_UUID=${CUT(OPENDDEEP_VARS,|,1)}) ; Assuming UUID is now the first part
+   same => n,Set(ASTERISK_CALL_UUID=${CUT(OPENDDEEP_VARS,|,1)})
    same => n,Set(ACTUAL_TARGET_TO_DIAL=${CUT(OPENDDEEP_VARS,|,2)})
-   ...
    same => n,Answer()
    same => n,AudioSocket(ws://YOUR_PYTHON_IP:1200/callaudio/${ASTERISK_CALL_UUID},cn)
    same => n,Dial(${ACTUAL_TARGET_TO_DIAL},30,g)
-   ...
+```
 
+AMI Event-Driven Call Progress:
+- Asynchronous event handling for call status tracking
+- "Fire and forget" Originate actions with Async: true
 
-(Note: The OPENDDEEP_VARS will need to be updated to pass the asterisk_call_uuid instead of the integer call_id as the first element).
+Multi-Tenancy:
+- Data isolation via user_id
+- User-specific DND lists
+- Scoped LLM contexts
 
-AMI Event-Driven Call Progress (Re-confirmed v12.0):
-The CallAttemptHandler relies on asynchronous AMI events (Newchannel, DialEnd, Hangup, etc.) to track the true status and outcome of a call attempt. The initial response to the Originate AMI action is treated as "fire and forget" (assumed successful if no immediate error) due to the Async: true parameter.
+Service Architecture:
+- TaskSchedulerService: Polling and DND checks
+- CallInitiatorService: Concurrency management
+- CallAttemptHandler: Per-call AMI interaction
+- AudioSocketServer: Asterisk audio connection
+- AudioSocketHandler: Audio stream management
+- PostCallAnalyzerService: Outcome analysis
+- TaskLifecycleManagerService: Strategic oversight
 
-(Other core decisions remain as in previous versions)
+Development & Testing:
+- Test Mode with redirected calls
+- Sequential execution option
+- Iterative component testing
 
-3. IMPLEMENTATION & FILE MANIFEST
-3.1. Required Libraries
+## 3. IMPLEMENTATION & FILE MANIFEST
 
-fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, asterisk-ami==0.1.7, uuid.
+### 3.1. Required Libraries
+fastapi, uvicorn, sqlalchemy, redis, openai, python-dotenv, pydantic, google-generativeai, httpx, asterisk-ami==0.1.7, uuid
 
-3.2. Detailed File Structure & Status
+### 3.2. Detailed File Structure & Status
 
-database/schema.sql [Planned Modification] - Add asterisk_call_uuid TEXT UNIQUE to the calls table.
-database/models.py [Planned Modification] - Add asterisk_call_uuid: Optional[str] = None to CallBase, CallCreate, Call.
-database/db_manager.py [Planned Modification] - Update create_call_attempt and update_call_status to handle asterisk_call_uuid.
-call_processor_service/call_attempt_handler.py [Modified] - Corrected Channel in Originate. Reordered AMI listener registration. [Planned Modification] - Generate uuid.uuid4(), store it in DB, and pass it in OPENDDEEP_VARS for the URI.
-call_processor_service/asterisk_ami_client.py [Modified] - Graceful timeout handling for send_action and verbose event logging added.
-audio_processing_service/audio_socket_server.py [Modified] - Added robust error handling and verbose logging. [Planned Modification] - Parse UUID from URI path.
-audio_processing_service/audio_socket_handler.py [Modified] - Added robust error handling and verbose logging. [Planned Modification] - Accept UUID in constructor, potentially map to integer call_id.
-extensions.conf (Asterisk) [Modified] - Uses AudioSocket(URI,cn) before Dial(). [Planned Modification] - Update to parse and use ${ASTERISK_CALL_UUID} in the URI path.
+**Core Services:**
+- database/schema.sql [Modified] - Database schema with new asterisk_call_uuid column
+- database/models.py [Modified] - Pydantic models with UUID support
+- database/db_manager.py [Modified] - Database operations including UUID handling
+- call_processor_service/call_attempt_handler.py [Modified] - Call handling with UUID generation
+- call_processor_service/asterisk_ami_client.py [Modified] - AMI interaction
+- audio_processing_service/audio_socket_server.py [Modified] - WebSocket server with UUID parsing
+- audio_processing_service/audio_socket_handler.py [Modified] - Audio stream handling
 
+**Supporting Services:**
+- task_manager/orchestrator_svc.py [Modified] - Campaign orchestration
+- task_manager/task_scheduler_svc.py [Modified] - Task scheduling
+- call_processor_service/call_initiator_svc.py [Modified] - Call initiation
+- config/app_config.py [Modified] - Configuration management
+
+**Web Interface:**
+- web_interface/app.py [Modified] - FastAPI application
+- web_interface/routes_api.py [Modified] - API endpoints
+- web_interface/routes_ui.py [Created] - UI routes
+- web_interface/static/* [Modified] - Frontend assets
+- web_interface/templates/* [Created] - HTML templates
+
+**Common Components:**
+- common/data_models.py [Modified] - Shared data models
+- common/logger_setup.py [Created] - Logging configuration
+- common/redis_client.py [Created] - Redis interface
+
+**Planned Components:**
+- audio_processing_service/openai_realtime_client.py
+- post_call_analyzer_service/analysis_svc.py
+- task_manager/task_lifecycle_manager_svc.py
+- task_manager/feedback_manager_svc.py
+- campaign_summarizer_service/*
+
+## 4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+
+Focus: Implement UUID handling for stable WebSocket connection
+
+1. Database Updates:
+   - Add asterisk_call_uuid column to calls table
+   - Update Pydantic models
+   - Add UUID-related database operations
+
+2. CallAttemptHandler Updates:
+   - Implement UUID generation
+   - Update AMI variable passing
+   - Add UUID storage in database
+
+3. AudioSocket Components:
+   - Update server for UUID parsing
+   - Modify handler for UUID management
+   - Implement UUID to call_id mapping
+
+4. Testing:
+   - Verify UUID generation and storage
+   - Test WebSocket connection stability
+   - Validate audio stream establishment
+
+   # OpenDeep - Master Project State & Forward Plan
+
+## 1. META-INSTRUCTIONS: HOW TO USE THIS DOCUMENT
+
+(Your Role as the AI Assistant)
+Your primary directive is the maintenance and evolution of this Wayforward.md document. This file is the absolute single source of truth for the entire OpenDeep project. It serves as your complete memory and context. Your goal is to ensure it is always perfectly up-to-date, integrating every decision, code change, and architectural agreement we make.
+
+(Your Core Task: The Update-Generate Loop)
+When I, the user, ask you to "update the Wayforward file," you must perform the following actions in order:
+
+Ingest Context: Read and fully comprehend two sources of information:
+- This ENTIRE Wayforward.md document (from version 1.0 to the current state).
+- The complete, verbatim transcript of our current chat session (the conversation that has occurred since this version of the file was created).
+
+Synthesize & Integrate: Merge the new information from our conversation into the existing structure of this document. This means updating changelogs, file statuses, architectural notes, and the action plan.
+
+Generate a New Version: Your final output for the request must be a single, complete, new Wayforward.md file. This new file is not a diff or a summary; it is the next authoritative version of this document.
+
+(Strict Rules for Regeneration - CRITICAL)
+- RECURSION: You MUST copy this entire Section 1: META-INSTRUCTIONS verbatim into the new version you generate. This ensures your successor AI instance understands its role perfectly.
+- INCREMENT VERSION: The first change you make must be to increment the Version number in Section 2.1.
+- PRESERVE HISTORY (Changelog): The Changelog is an immutable, running log. Never remove old entries. Add a new entry under the new version number detailing the accomplishments of the latest session.
+- MAINTAIN STABILITY (User Instruction): Do not change variable names, database names, or any other fixed components. New additions are fine, but do not alter existing structures in a way that breaks the established flow.
+- UPDATE FILE STATUS: In Section 3.2, change the status of files we've worked on from [Planned] to [Created] or [Modified]. Add a concise, one-line summary of each file's purpose if it's new or significantly changed.
+- INTEGRATE DECISIONS: Architectural agreements and key decisions from our chat must be woven into Section 2.3. Explain why a decision was made, not just what it was.
+- DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specific plan for what we will do in the very next session.
+
+## 2. PROJECT OVERVIEW & CURRENT STATE
+
+### 2.1. Version & Status
+
+Project Version: 14.0
+
+Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks.
+
+Current Development Phase: Phase 2b (Task Execution Engine & Audio Path - TCP AudioSocket Integration).
+
+Current Focus: Resolving Asterisk's "no activity on AudioSocket connection" timeout after the initial TCP connection and UUID exchange with the Python server. The phone is not ringing yet due to the AudioSocket leg failing.
+
+Next Major Architectural Step: Achieve a stable, bi-directional audio stream between the softphone, Asterisk (via TCP AudioSocket), and the Python `AudioSocketHandler`.
+
+### 2.2. Changelog / Revision History
+
+v14.0 (Current Version):
+- **Critical Realization (AudioSocket Type):** Confirmed via `core show application AudioSocket` that the Asterisk instance is using a **raw TCP version of `AudioSocket(uuid,host:port)`**, not a WebSocket version. This was a fundamental misunderstanding in previous approaches.
+- **Architecture Pivot (Python Server):**
+    - Modified `audio_processing_service/audio_socket_server.py` to be a raw TCP server, removing all WebSocket handshake logic.
+    - Heavily modified `audio_processing_service/audio_socket_handler.py`:
+        - `__init__` now only takes `reader, writer, redis_client, peername`. `call_id` and `asterisk_call_uuid` are determined after the first frame.
+        - `handle_frames` now first reads and expects a `TYPE_UUID` frame from Asterisk, decodes the UUID, and uses it to look up the internal `call_id` via `db_manager.get_call_by_asterisk_uuid`.
+        - Implemented a retry loop for the DB lookup of `asterisk_call_uuid` to handle potential timing issues with `CallAttemptHandler`'s DB update.
+- **Dialplan Correction:** Updated `extensions.conf` (`[opendeep-ai-leg]`) to use the correct `AudioSocket(${ASTERISK_CALL_UUID},<IP>:<PORT>)` syntax for the TCP version.
+- **Bug Fix (Python):** Resolved `NameError: name 'full_audiosocket_uri_with_call_id' is not defined` in `call_processor_service/call_attempt_handler.py` by removing unused variable definitions.
+- **Bug Fix (Python):** Resolved `AttributeError: 'AppConfig' object has no attribute 'AUDIOSOCKET_READ_TIMEOUT_S'` by adding `AUDIOSOCKET_READ_TIMEOUT_S` to `config/app_config.py`.
+- **Progress:**
+    - Successfully established a raw TCP connection from Asterisk's `AudioSocket` application to the Python `AudioSocketServer`.
+    - Python `AudioSocketHandler` successfully receives and parses the initial `TYPE_UUID` frame containing the `asterisk_call_uuid` sent by Asterisk.
+    - Python `AudioSocketHandler` successfully uses this UUID to look up the internal `call_id` from the database (with retry logic proving effective).
+    - Python `AudioSocketHandler` updates the call status to `LIVE_AI_HANDLING` and attempts to send an empty audio frame back to Asterisk.
+- **New Issue Identified:** Despite Python sending an empty audio frame, Asterisk still times out with "Reached timeout after 2000 ms of no activity on AudioSocket connection." This causes the `AudioSocket` leg to fail, and consequently, the `Dial()` on the other leg of the `Local` channel does not proceed long enough for the phone to be answered (results in a missed call). The Python handler sees the connection drop as "0 bytes read on a total of 3 expected bytes" when trying to read the next frame.
+
+v13.0:
+- **Root Cause Diagnosis (UUID):** Identified that `app_audiosocket.c` (WebSocket version assumption at the time) was erroring with "Failed to parse UUID" because the URI's path component (our integer `call_id`) was not a standard UUID.
+- **Architecture Decision (UUID for Asterisk - initial plan):** Decided to generate a `uuid.uuid4()` in `CallAttemptHandler`, store it in `calls.call_uuid`, and use this in the WebSocket URI path.
+- **Code Modifications (based on WebSocket assumption):** Updated `schema.sql`, `models.py`, `db_manager.py`, `call_attempt_handler.py`, `audio_socket_server.py`, `audio_socket_handler.py` to handle string UUIDs for the WebSocket path and map them to internal integer `call_id`.
+
+v12.0:
+- **Major Success (Call Origination & Dialplan - initial):** Achieved call origination where the phone rang and could be answered, using a `Local` channel and `Wait()` application.
+- **AMI Event Reception Verified:** Confirmed Python received AMI events.
+- **Issue Narrowed (at the time):** `app_audiosocket.c: Failed to parse UUID` became the main blocker (still assuming WebSocket `AudioSocket(URI,cn)`).
+
+(Older versions summarized for brevity in previous Wayforward versions)
+
+### 2.3. Core Architecture & Key Decisions
+
+- **AudioSocket Protocol (Decision from v14.0):** The system will now use Asterisk's **raw TCP AudioSocket protocol** as defined by `AudioSocket(uuid, host:port)`. The Python server (`AudioSocketServer` and `AudioSocketHandler`) acts as a raw TCP server, expecting the specific binary framing protocol (initial `TYPE_UUID` frame, then audio/DTMF/hangup frames). This supersedes all previous WebSocket-based AudioSocket assumptions.
+
+- **UUID Handling for TCP AudioSocket (Decision from v14.0):**
+    1. `CallAttemptHandler` generates a string `asterisk_call_specific_uuid` (e.g., `uuid.uuid4()`).
+    2. This UUID is stored in the `calls.call_uuid` column in the database.
+    3. This UUID is passed to the Asterisk dialplan via `OPENDDEEP_VARS`.
+    4. The dialplan uses this UUID as the *first argument* to `AudioSocket(${ASTERISK_CALL_UUID}, <IP>:<PORT>)`.
+    5. Asterisk, upon TCP connection, sends a binary frame of `TYPE_UUID` containing this `ASTERISK_CALL_UUID` as its payload to the Python TCP server.
+    6. The Python `AudioSocketHandler` reads this first frame, extracts the `asterisk_call_uuid`, and uses it to look up the internal integer `call_id` from the database.
+
+- **Python Server for Audio (Decision from v14.0):** `audio_processing_service/audio_socket_server.py` is a simple `asyncio` raw TCP server. `audio_processing_service/audio_socket_handler.py` manages the state and frame processing for a single TCP connection from Asterisk, adhering to the binary AudioSocket protocol.
+
+- **AMI Variable Passing (Decision from v11.0, still relevant):** Use a single pipe-separated string for `OPENDDEEP_VARS` passed via AMI `Originate`, parsed in the dialplan using `CUT()`. Current format: `ASTERISK_CALL_UUID|ACTUAL_TARGET_TO_DIAL`.
+
+- **Local Channel for Call Structure (Decision from v11.0, still relevant):**
+    - Python originates to `Local/s@opendeep-ai-leg`.
+    - The `Originate` action's `Context` parameter directs the second leg to `[opendeep-human-leg]`.
+    - `[opendeep-ai-leg]` handles `Answer()` and `AudioSocket()`.
+    - `[opendeep-human-leg]` handles `Dial()` to the target.
+
+(Other core decisions regarding AMI client, multi-tenancy, service separation remain as in previous versions unless directly superseded by the AudioSocket type change).
+
+### 3.2. Detailed File Structure & Status
+
+**config/app_config.py** [Modified] - Added `AUDIOSOCKET_READ_TIMEOUT_S`.
+**database/db_manager.py** [Modified] - `get_call_by_asterisk_uuid` added. Ensured `**dict(row)` for Pydantic model instantiation.
+**call_processor_service/call_attempt_handler.py** [Modified] - `Originate` params updated for `Local/s@opendeep-ai-leg` and `Context: opendeep-human-leg`. Unused variables in `_originate_call` removed. `_process_ami_event` updated.
+**extensions.conf (Asterisk)** [Modified] - Contexts `[opendeep-ai-leg]` and `[opendeep-human-leg]` updated to use TCP `AudioSocket(${UUID},${HOST}:${PORT})` syntax.
+**audio_processing_service/audio_socket_server.py** [Heavily Modified] - Changed from WebSocket server to raw TCP server. `_handle_new_connection` simplified, passes raw `reader`/`writer` to handler.
+**audio_processing_service/audio_socket_handler.py** [Heavily Modified] - Rewritten for raw TCP AudioSocket protocol. `__init__` simplified. `handle_frames` now reads initial `TYPE_UUID` frame, looks up `call_id` by this UUID, then enters main frame loop. Sends an empty audio frame back after initial UUID processing.
+
+---
+*Files modified in previous sessions related to UUID for WebSocket path (now less relevant but changes made):*
+database/schema.sql [No Change in v14, used existing `call_uuid` column]
+database/models.py [No Change in v14, `call_uuid: Optional[str]` was suitable]
+
+---
+*Other active files:*
 main.py [Modified]
 web_interface/app.py [Modified]
 task_manager/orchestrator_svc.py [Modified]
 task_manager/task_scheduler_svc.py [Modified]
 call_processor_service/call_initiator_svc.py [Modified]
-config/app_config.py [Modified]
+call_processor_service/asterisk_ami_client.py [Modified]
 config/prompt_config.py [No Change Expected]
 llm_integrations/openai_form_client.py [Modified]
 llm_integrations/google_gemini_client.py [Created]
@@ -652,111 +337,96 @@ common/data_models.py [Modified]
 common/logger_setup.py [Created]
 common/redis_client.py [Created]
 
+---
+*Planned / Untouched AI processing files:*
 [Planned] audio_processing_service/openai_realtime_client.py
 [Planned] post_call_analyzer_service/analysis_svc.py
 [Planned] task_manager/task_lifecycle_manager_svc.py
 [Planned] task_manager/feedback_manager_svc.py
 [Planned] campaign_summarizer_service/*
 
-4. IMMEDIATE NEXT STEPS (ACTION PLAN)
+## 4. IMMEDIATE NEXT STEPS (ACTION PLAN)
 
-The sole focus of the next session is to implement proper UUID handling to achieve a stable WebSocket connection between Asterisk and the Python AudioSocketServer.
+The immediate focus is to resolve Asterisk's "no activity on AudioSocket connection" timeout, which prevents the call from fully establishing and the phone from ringing properly. The empty audio frame sent by Python was not sufficient.
 
-Database Schema Modification (database/schema.sql):
+**Hypothesis:** Asterisk's TCP `AudioSocket` application, after sending its initial `TYPE_UUID` frame, either:
+    a) Expects a continuous stream of audio frames (even silence) from the server to keep the socket "active."
+    b) Or, it needs to have audio *from the Asterisk channel itself* (e.g., from the `Dial()` leg) to send to the Python server quickly, and if there's none, it times out.
 
-Add the new column asterisk_call_uuid TEXT UNIQUE DEFAULT NULL to the calls table.
+**Next Test: Simplify Dialplan to Force Audio from Asterisk to Python via AudioSocket**
 
-Action: Provide the updated schema.sql.
+To isolate whether the issue is Python's responsibility to send keep-alives or Asterisk's responsibility to send initial channel audio:
 
-Pydantic Models Update (database/models.py):
+1.  **Temporary Dialplan Change (`extensions.conf`):**
+    *   Modify `CallAttemptHandler`'s `_originate_call` to use a new temporary context that *immediately plays audio on the channel before connecting AudioSocket*.
+    *   **New Temporary Context `[test-audiosocket-playback-first]`:**
+        ```ini
+        [test-audiosocket-playback-first]
+        exten => s,1,NoOp(==== Test AudioSocket with Early Playback ====)
+            same => n,Set(ASTERISK_CALL_UUID=${CUT(OPENDDEEP_VARS,|,1)})
+            same => n,Answer()
+            ; Play a known, short sound file directly on this channel leg
+            ; This ensures there is audio data available on the channel
+            ; when AudioSocket starts.
+            same => n,Playback(tt-monkeys) ; Or any short sound file like demo-congrats
+            same => n,NoOp(Playback finished. Attempting AudioSocket with UUID: ${ASTERISK_CALL_UUID})
+            same => n,AudioSocket(${ASTERISK_CALL_UUID},192.168.1.183:1200)
+            same => n,NoOp(AudioSocket Status: ${AUDIOSOCKETSTATUS})
+            same => n,Wait(5) ; Keep channel alive for a bit to see if audio frames flow
+            same => n,Hangup()
+        ```
+    *   **Temporary Change in `call_processor_service/call_attempt_handler.py` (`_originate_call` method):**
+        ```python
+        # Inside _originate_call, TEMPORARILY change these for the test:
+        originate_action = AmiAction(
+            "Originate",
+            Channel=f"Local/s@test-audiosocket-playback-first", # Target the new test context
+            Context="default", # Second leg of Local channel is not the focus for this specific test
+            Exten="s",
+            Priority=1,
+            # ... (CallerID, Timeout, Async as before) ...
+            Variable=f"OPENDDEEP_VARS={self.asterisk_call_specific_uuid}|IGNORED_FOR_THIS_TEST" # Only UUID is used by test context
+        )
+        ```
 
-Add asterisk_call_uuid: Optional[str] = None to CallBase.
+2.  **Python `AudioSocketHandler` (`handle_frames`):**
+    *   Temporarily **comment out** the section that sends the "initial empty AUDIO frame" *from Python to Asterisk*. We want to see if Asterisk will send audio *first* now that we're forcing playback on its channel.
+        ```python
+            # ...
+            # --- NEW: Send an initial empty audio frame to Asterisk to acknowledge / keep-alive ---
+            # COMMENT OUT THIS BLOCK FOR THE TEST
+            # try:
+            #     logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Sending initial empty AUDIO frame to Asterisk.")
+            #     empty_audio_frame_header = struct.pack("!BH", TYPE_AUDIO, 0)
+            #     if self.writer and not self.writer.is_closing():
+            #         self.writer.write(empty_audio_frame_header)
+            #         await self.writer.drain()
+            #         logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Successfully sent initial empty AUDIO frame.")
+            #     else: # ...
+            # except Exception as e_send_empty: # ...
+            # --- END COMMENT OUT ---
 
-Add asterisk_call_uuid: Optional[str] = None to CallCreate (it will be set by the handler, so optional here).
+            # --- Main frame processing loop ---
+            # ...
+        ```
 
-Ensure Call inherits this.
+3.  **Execution & Observation:**
+    *   `dialplan reload` in Asterisk.
+    *   Restart Python application.
+    *   Trigger a call from the UI.
+    *   **Expected Outcome / Things to Check:**
+        *   **Asterisk Logs:**
+            *   Does the `Playback(tt-monkeys)` execute?
+            *   Does the `AudioSocket(...)` line execute?
+            *   Does the "Reached timeout after 2000 ms of no activity" error *still* appear?
+        *   **Python Logs:**
+            *   Does `AudioSocketHandler` still successfully receive the initial `TYPE_UUID` and map the `call_id`?
+            *   **Most importantly:** After the UUID processing, does it start receiving `TYPE_AUDIO` frames from Asterisk (due to the `Playback` application)? Look for `"[AudioSocketHandler-TCP:...] Received AUDIO frame, len=..."` logs.
+        *   **Phone Call:** The phone will likely *not* ring in this test because we are not using the `opendeep-human-leg` to `Dial()`. The focus is purely on stabilizing the `AudioSocket` connection on the AI leg.
 
-Action: Provide the updated models.py.
+**Interpreting Results of This Test:**
 
-DB Manager Update (database/db_manager.py):
+*   **If Python *receives audio frames* and Asterisk *does not time out*:** This strongly suggests the "no activity" timeout was because the `Local` channel's AI leg (`opendeep-ai-leg`) had no audio to send to the `AudioSocket` application initially. The solution would then involve ensuring that audio from the `Dial()` on the `opendeep-human-leg` is properly bridged or made available to the `opendeep-ai-leg` *before or as* `AudioSocket` connects. This could involve using `Bridge()` or ensuring the `Local` channel itself facilitates this.
+*   **If Asterisk *still times out* even with `Playback()` trying to send audio:** This would mean the issue is more likely that `app_audiosocket.c` expects some specific acknowledgment or continuous "keep-alive" frames *from the Python server* beyond the initial empty audio frame we tried. We might need to dig into the `app_audiosocket.c` source or experiment with sending periodic silent audio frames from Python.
 
-Modify create_call_attempt:
-
-It will now need to accept asterisk_call_uuid as an argument (or this can be set via update_call_status immediately after creation by the handler). For now, let's plan to update it via update_call_status.
-
-The INSERT statement for calls table does not need to change if we use update_call_status.
-
-Modify update_call_status:
-
-Add asterisk_call_uuid: Optional[str] = None as an optional keyword argument.
-
-If asterisk_call_uuid is provided, include it in the UPDATE statement.
-
-Action: Provide the updated db_manager.py.
-
-CallAttemptHandler Logic (call_processor_service/call_attempt_handler.py):
-
-In the _originate_call method:
-
-Import uuid.
-
-Generate asterisk_call_uuid = str(uuid.uuid4()).
-
-Log this UUID.
-
-Update vars_to_pass: The first element should now be asterisk_call_uuid, not self.call_id.
-vars_to_pass = f"{asterisk_call_uuid}|{dial_string_for_dialplan}"
-
-After the Originate action is assumed successful (i.e., response.get("Response") == "Success"), immediately call self._update_call_status_db(self.call_record.status, call_uuid=asterisk_call_uuid) to save the generated UUID to the database for this call attempt. Note: call_uuid is the parameter name in _update_call_status_db that will map to asterisk_call_uuid in the database.
-
-Action: Provide the updated call_attempt_handler.py.
-
-Asterisk Dialplan Update (extensions.conf):
-
-In [opendeep-audiosocket-outbound]:
-
-The Set(CALL_ATTEMPT_ID=...) should now parse the asterisk_call_uuid from OPENDDEEP_VARS. Let's rename the variable in the dialplan for clarity.
-same => n,Set(ASTERISK_CALL_UUID=${CUT(OPENDDEEP_VARS,|,1)})
-
-The AudioSocket line must use this new variable:
-same => n,AudioSocket(ws://YOUR_PYTHON_IP:1200/callaudio/${ASTERISK_CALL_UUID},cn)
-
-Action: Provide the updated [opendeep-audiosocket-outbound] context.
-
-AudioSocketServer and AudioSocketHandler Updates:
-
-audio_processing_service/audio_socket_server.py (_handle_new_connection):
-
-When parsing the path path_segments[-1], this will now be the string UUID. Store it as asterisk_call_uuid_str.
-
-Remove the int() conversion.
-
-Pass this asterisk_call_uuid_str to the AudioSocketHandler constructor instead of the integer call_id.
-
-audio_processing_service/audio_socket_handler.py:
-
-The constructor will now receive asterisk_call_uuid: str. Store this.
-
-For logging, use this asterisk_call_uuid.
-
-Crucially: The handler still needs the integer call_id for database updates (like call status) and Redis channel naming. Upon initialization, the handler must perform a database lookup to find the integer call_id associated with the received asterisk_call_uuid.
-
-Add a new method to db_manager.py: get_call_by_asterisk_uuid(asterisk_uuid: str) -> Optional[Call]:.
-
-The AudioSocketHandler will call this in its __init__ or at the start of handle_frames to get the full Call object, including the integer id. If not found, it should log an error and close the connection.
-
-Action: Provide updated audio_socket_server.py, audio_socket_handler.py, and the new DB manager function.
-
-Testing:
-
-After all changes: Start clean (delete DB, restart Python app, ensure Asterisk dialplan is reloaded/Asterisk restarted).
-
-Trigger a call.
-
-Answer.
-
-Observe Asterisk logs for successful AudioSocket execution (no UUID parse error).
-
-Observe Python logs for connection establishment in AudioSocketServer and frame reception in AudioSocketHandler.
-
-This comprehensive plan directly targets the identified UUID issue and ensures data consistency.
+This test will help us understand which side (Asterisk not sending, or Python not sending the *right kind* of keep-alive) is causing the timeout.

@@ -53,6 +53,8 @@ def initialize_database():
         conn.close()
 
 # --- User Operations ---
+
+
 def get_or_create_user(username: str) -> Optional[User]:
     """Retrieves a user by username, creating them if they don't exist."""
     conn = get_db_connection()
@@ -61,7 +63,7 @@ def get_or_create_user(username: str) -> Optional[User]:
         cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
         row = cursor.fetchone()
         if row:
-            return User(**row)
+            return User(**dict(row))
 
         cursor.execute("INSERT INTO users (username) VALUES (?)", (username,))
         conn.commit()
@@ -73,7 +75,7 @@ def get_or_create_user(username: str) -> Optional[User]:
 
         cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         new_row = cursor.fetchone()
-        return User(**new_row) if new_row else None
+        return User(**dict(new_row)) if new_row else None
     except sqlite3.Error as e:
         logger.error(f"Database error in get_or_create_user for {username}: {e}", exc_info=True)
         return None
@@ -98,7 +100,7 @@ def create_campaign(campaign_data: CampaignCreate) -> Optional[Campaign]:
 
         cursor.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
         row = cursor.fetchone()
-        return Campaign(**row) if row else None
+        return Campaign(**dict(row)) if row else None
     except sqlite3.Error as e:
         logger.error(f"Database error in create_campaign for user {campaign_data.user_id}: {e}", exc_info=True)
         return None
@@ -190,7 +192,7 @@ def get_task_by_id(task_id: int) -> Optional[Task]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
-        return Task(**row) if row else None
+        return Task(**dict(row)) if row else None
     except sqlite3.Error as e:
         logger.error(f"Database error in get_task_by_id for task ID {task_id}: {e}", exc_info=True)
         return None
@@ -312,6 +314,24 @@ def get_due_tasks(user_id: Optional[int] = None, max_tasks: int = 10) -> List[Ta
 
 # Add this function to database/db_manager.py (or replace if a similar one exists)
 
+def get_call_by_asterisk_uuid(asterisk_uuid: str) -> Optional[Call]:
+    """Retrieves a specific call attempt by its Asterisk call_uuid."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # We query using the 'call_uuid' column which stores the Asterisk UUID
+        cursor.execute("SELECT * FROM calls WHERE call_uuid = ?", (asterisk_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return Call(**dict(row)) # Ensure conversion to dict if row_factory provides sqlite3.Row
+        logger.warning(f"No call found with Asterisk UUID: {asterisk_uuid}")
+        return None
+    except sqlite3.Error as e:
+        logger.error(f"Database error in get_call_by_asterisk_uuid for Asterisk UUID {asterisk_uuid}: {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
 def get_call_by_id(call_id: int) -> Optional[Call]:
     """Retrieves a specific call attempt by its ID."""
     conn = get_db_connection()
@@ -320,7 +340,7 @@ def get_call_by_id(call_id: int) -> Optional[Call]:
         cursor.execute("SELECT * FROM calls WHERE id = ?", (call_id,))
         row = cursor.fetchone()
         if row:
-            return Call(**row)
+            return Call(**dict(row))
         logger.warning(f"No call found with ID: {call_id}")
         return None
     except sqlite3.Error as e:
@@ -401,7 +421,7 @@ def get_calls_for_task(task_id: int) -> List[Call]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM calls WHERE task_id = ? ORDER BY attempt_number ASC", (task_id,))
         for row in cursor.fetchall():
-            calls.append(Call(**row))
+            calls.append(Call(**dict(row)))
     except sqlite3.Error as e:
         logger.error(f"Database error fetching calls for task ID {task_id}: {e}", exc_info=True)
     finally:
@@ -427,7 +447,7 @@ def add_to_dnd_list(dnd_entry_data: DNDEntryCreate) -> Optional[DNDEntry]:
         cursor.execute("SELECT * FROM dnd_list WHERE user_id = ? AND phone_number = ?",
                        (dnd_entry_data.user_id, dnd_entry_data.phone_number))
         row = cursor.fetchone()
-        return DNDEntry(**row) if row else None
+        return DNDEntry(**dict(row)) if row else None
         
     except sqlite3.Error as e:
         logger.error(f"Database error adding {dnd_entry_data.phone_number} to DND for user {dnd_entry_data.user_id}: {e}", exc_info=True)
@@ -463,7 +483,7 @@ def log_transcript_entry(entry_data: CallTranscriptCreate) -> Optional[CallTrans
         if entry_id:
             cursor.execute("SELECT * FROM call_transcripts WHERE id = ?", (entry_id,))
             row = cursor.fetchone()
-            return CallTranscript(**row) if row else None
+            return CallTranscript(**dict(row)) if row else None
         return None
     except sqlite3.Error as e:
         logger.error(f"Database error logging transcript for call ID {entry_data.call_id}: {e}", exc_info=True)
@@ -568,3 +588,7 @@ if __name__ == "__main__": # pragma: no cover
         asyncio.run(run_async_tests())
     else:
         logger.error(f"Could not retrieve task {task_id} for async tests.")
+
+
+# Add this function to database/db_manager.py
+

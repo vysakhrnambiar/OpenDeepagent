@@ -33,7 +33,8 @@ class AppConfig:
     # AudioSocket Server Configuration (for Asterisk to connect to)
     AUDIOSOCKET_HOST: str = os.getenv("AUDIOSOCKET_HOST", "0.0.0.0") # Host for our audiosocket server
     AUDIOSOCKET_PORT: int = int(os.getenv("AUDIOSOCKET_PORT", 1200)) # Port for our audiosocket server
-
+        # Add the missing timeout variable for TCP AudioSocket reads
+    AUDIOSOCKET_READ_TIMEOUT_S: float = float(os.getenv("AUDIOSOCKET_READ_TIMEOUT_S", 5.0)) # <-- ADD THIS LINE
     # Application Settings
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     MAX_CONCURRENT_CALLS: int = int(os.getenv("MAX_CONCURRENT_CALLS", 10)) # For CallInitiatorService
