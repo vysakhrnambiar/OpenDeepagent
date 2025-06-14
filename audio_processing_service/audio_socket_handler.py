@@ -195,43 +195,67 @@ class AudioSocketHandler:
                 return
 
             # ---- TEST: Python sends audio to Asterisk ----
-            # await asyncio.sleep(0.1) # Keep this delay very short or remove for immediate test
             logger.critical(f"PYTHON IS ABOUT TO SEND TEST TONE NOW for AppCallID={self.call_id}")
             logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] TEST: Attempting to send test TONE to Asterisk.")
             try:
+                # Create local buffer and lock for test tone
+                test_tone_buffer = bytearray()
+                test_tone_lock = asyncio.Lock()
+                TARGET_CHUNK_SIZE = 320  # 20ms of 8kHz, 16-bit PCM audio
+
+                # Generate complete test tone first
                 sample_rate = 8000
-                frequency = 440  # A4 note
+                frequency = 440 # A4 note
                 duration_ms_per_chunk = 20
                 num_samples_per_chunk = int(sample_rate * duration_ms_per_chunk / 1000)
-                num_test_frames = 50 # Send for 1 second
+                num_test_frames = 50  # Send for 1 second
 
-                t = np.linspace(0, duration_ms_per_chunk / 1000, num_samples_per_chunk, endpoint=False)
-                sine_wave_chunk_float = 0.3 * np.sin(2 * np.pi * frequency * t)
-                sine_wave_chunk_pcm16 = (sine_wave_chunk_float * 32767).astype(np.int16)
-                tone_payload_chunk = sine_wave_chunk_pcm16.tobytes()
+                # Generate all tone chunks upfront
+                for _ in range(num_test_frames):
+                    t = np.linspace(0, duration_ms_per_chunk / 1000, num_samples_per_chunk, endpoint=False)
+                    sine_wave_chunk_float = 0.3 * np.sin(2 * np.pi * frequency * t)
+                    sine_wave_chunk_pcm16 = (sine_wave_chunk_float * 32767).astype(np.int16)
+                    # Verify chunk size is exactly 320 bytes (160 samples * 2 bytes per sample)
+                    if sine_wave_chunk_pcm16.size * 2 != TARGET_CHUNK_SIZE:
+                        logger.error(f"Generated chunk size {sine_wave_chunk_pcm16.size * 2} != {TARGET_CHUNK_SIZE}")
+                        continue
+                    tone_chunk = sine_wave_chunk_pcm16.tobytes()
+                    async with test_tone_lock:
+                        test_tone_buffer.extend(tone_chunk)
 
-                if len(tone_payload_chunk) < 320:
-                    logger.warning(f"Tone payload chunk size is {len(tone_payload_chunk)}, expected 320. Padding.")
-                    tone_payload_chunk = tone_payload_chunk + b'\x00' * (320 - len(tone_payload_chunk))
-                elif len(tone_payload_chunk) > 320:
-                    logger.warning(f"Tone payload chunk size is {len(tone_payload_chunk)}, expected 320. Truncating.")
-                    tone_payload_chunk = tone_payload_chunk[:320]
+                # Save test tone to WAV for verification
+                test_tone_wav_path = Path(_project_root) / "recordings" / f"test_tone_{self.call_id}.wav"
+                try:
+                    with wave.open(str(test_tone_wav_path), 'wb') as wav_file:
+                        wav_file.setnchannels(1)  # Mono audio
+                        wav_file.setsampwidth(2)  # 2 bytes per sample (16-bit PCM)
+                        wav_file.setframerate(sample_rate)  # 8kHz sample rate
+                        wav_file.writeframes(test_tone_buffer)
+                    logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Saved test tone to {test_tone_wav_path}")
+                except Exception as e_wav:
+                    logger.error(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Error saving test tone WAV: {e_wav}")
 
-                test_audio_header = struct.pack("!BH", TYPE_AUDIO, len(tone_payload_chunk))
+                # Send the test tone using buffered approach
+                while len(test_tone_buffer) > 0 and not self._stop_event.is_set():
+                    chunk_to_send = None
+                    async with test_tone_lock:
+                        if len(test_tone_buffer) >= TARGET_CHUNK_SIZE:
+                            chunk_to_send = test_tone_buffer[:TARGET_CHUNK_SIZE]
+                            del test_tone_buffer[:TARGET_CHUNK_SIZE]
 
-                for i in range(num_test_frames):
-                    if self._stop_event.is_set(): # Check stop event before sending
-                        logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Stop event set during test TONE send. Aborting.")
-                        break
-                    if self.writer and not self.writer.is_closing():
-                        self.writer.write(test_audio_header + tone_payload_chunk)
-                        await self.writer.drain()
-                        logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent test TONE frame {i+1}/{num_test_frames} to Asterisk.")
-                        await asyncio.sleep(0.018)
-                    else:
-                        logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Writer closed during test TONE send. Aborting.")
-                        break
-                if not self._stop_event.is_set(): # Log finish only if not stopped
+                    if chunk_to_send:
+                        if self.writer and not self.writer.is_closing():
+                            header = struct.pack("!BH", TYPE_AUDIO, len(chunk_to_send))
+                            audio_packet = header + chunk_to_send
+                            self.writer.write(audio_packet)
+                            await self.writer.drain()
+                            logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent test TONE chunk to Asterisk: header={header.hex()}, payload_size={len(chunk_to_send)}, first_bytes={chunk_to_send[:4].hex()}")
+                            await asyncio.sleep(0.015)  # Proper timing like asty.py
+                        else:
+                            logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Writer closed during test TONE send. Aborting.")
+                            break
+
+                if not self._stop_event.is_set():
                     logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] TEST: Finished sending test TONE.")
             except Exception as e_send_test:
                 logger.error(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] TEST: Error sending test TONE: {e_send_test}", exc_info=True)
