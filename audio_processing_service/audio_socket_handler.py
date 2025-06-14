@@ -195,7 +195,6 @@ class AudioSocketHandler:
                 return
 
             # ---- TEST: Python sends audio to Asterisk ----
-            # await asyncio.sleep(0.1) # Keep this delay very short or remove for immediate test
             logger.critical(f"PYTHON IS ABOUT TO SEND TEST TONE NOW for AppCallID={self.call_id}")
             logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] TEST: Attempting to send test TONE to Asterisk.")
             try:
@@ -227,7 +226,7 @@ class AudioSocketHandler:
                         self.writer.write(test_audio_header + tone_payload_chunk)
                         await self.writer.drain()
                         logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent test TONE frame {i+1}/{num_test_frames} to Asterisk.")
-                        await asyncio.sleep(0.018)
+                        await asyncio.sleep(0.015)  # Match the echo timing
                     else:
                         logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Writer closed during test TONE send. Aborting.")
                         break
@@ -252,7 +251,15 @@ class AudioSocketHandler:
                     if frame_msg_type == TYPE_AUDIO:
                         if frame_payload:
                             logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Received AUDIO frame, len={frame_payload_len}")
-                            self._incoming_audio_frames.append(frame_payload) # Buffer the audio
+                            self._incoming_audio_frames.append(frame_payload) # Buffer the audio for saving
+                            
+                            # Echo back the audio frame immediately
+                            if self.writer and not self.writer.is_closing():
+                                echo_header = struct.pack("!BH", TYPE_AUDIO, len(frame_payload))
+                                self.writer.write(echo_header + frame_payload)
+                                await self.writer.drain()
+                                logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Echoed back AUDIO frame, len={frame_payload_len}")
+                                await asyncio.sleep(0.015)  # Small delay for frame synchronization
                         else:
                             logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Received AUDIO frame with zero payload.")
 
