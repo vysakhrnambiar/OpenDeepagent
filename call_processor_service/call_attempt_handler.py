@@ -122,7 +122,8 @@ class CallAttemptHandler:
             #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
            # Channel=f"Local/s@opendeep-holding-context", # <-- NEW LINE
             #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
-            Channel=f"Local/s@opendeep-ai-leg",
+            #Channel=f"Local/s@opendeep-ai-leg",
+            Channel=f"Local/s@test-audiosocket-playback-first",
             #Context="opendeep-audiosocket-outbound", # The context where our logic lives
             Context="opendeep-human-leg",  
             Exten="s",                               # The 'start' extension
