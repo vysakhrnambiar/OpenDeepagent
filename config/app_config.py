@@ -35,6 +35,8 @@ class AppConfig:
     AUDIOSOCKET_PORT: int = int(os.getenv("AUDIOSOCKET_PORT", 1200)) # Port for our audiosocket server
         # Add the missing timeout variable for TCP AudioSocket reads
     AUDIOSOCKET_READ_TIMEOUT_S: float = float(os.getenv("AUDIOSOCKET_READ_TIMEOUT_S", 5.0)) # <-- ADD THIS LINE
+
+    OUTPUT_GAIN_FACTOR: float = 1.5 # Default gain, adjust as neede
     # Application Settings
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     MAX_CONCURRENT_CALLS: int = int(os.getenv("MAX_CONCURRENT_CALLS", 10)) # For CallInitiatorService

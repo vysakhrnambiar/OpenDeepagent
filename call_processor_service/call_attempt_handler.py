@@ -49,6 +49,8 @@ class CallAttemptHandler:
         self.call_end_time: Optional[datetime] = None
 
         self.asterisk_call_specific_uuid: Optional[str] = None # Will hold the UUID for AudioSocket path
+        self.openai_client: Optional[OpenAIRealtimeClient] = None # Store OpenAI client instance
+        self.openai_session_id: Optional[str] = None # Store OpenAI session ID
 
         self._stop_event = asyncio.Event()
         self._redis_listener_task: Optional[asyncio.Task] = None
@@ -61,12 +63,18 @@ class CallAttemptHandler:
         logger.info(f"[CallAttemptHandler:{self.call_id}] Preparing to originate call.")
         if self._loop is None: self._loop = asyncio.get_running_loop()
         
+        # 1. Get task details
         task = await self._loop.run_in_executor(None, db_manager.get_task_by_id, self.task_id)
         if not task:
             logger.error(f"[CallAttemptHandler:{self.call_id}] Could not fetch task details for Task ID {self.task_id}. Aborting.")
             await self._update_call_status_db(CallStatus.FAILED_INTERNAL_ERROR, hangup_cause="Task details unavailable")
             return False
 
+        # Generate UUID for this call
+        self.asterisk_call_specific_uuid = str(uuid.uuid4())
+        logger.info(f"[CallAttemptHandler:{self.call_id}] Generated UUID for AudioSocket: {self.asterisk_call_specific_uuid}")
+
+        # 3. Proceed with call setup
         target_phone_number = task.phone_number
         original_number_for_logging = task.phone_number
 
@@ -75,12 +83,15 @@ class CallAttemptHandler:
             logger.warning(f"[CallAttemptHandler:{self.call_id}] TEST MODE ENABLED. Redirecting call for {original_number_for_logging} to {target_phone_number}.")
 
         channel_to_dial = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{app_config.DEFAULT_CALLER_ID_EXTEN}/{target_phone_number}"
-        #dial_string = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" 
-        self.asterisk_call_specific_uuid = str(uuid.uuid4()) # Generate and store the UUID
+        
+        # Generate UUID and immediately update database
+        self.asterisk_call_specific_uuid = str(uuid.uuid4())
         logger.info(f"[CallAttemptHandler:{self.call_id}] Generated Asterisk-specific UUID for AudioSocket: {self.asterisk_call_specific_uuid}")
-        # This is the CRITICAL CHANGE: The Data field for AudioSocket
-        #full_audiosocket_uri_with_call_id = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.call_id}"
-        #logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_call_id}")
+        
+        # Update database with UUID first to prevent race condition
+        await self._update_call_status_db(CallStatus.PENDING_ORIGINATION, call_uuid=self.asterisk_call_specific_uuid)
+        
+        # Now set up the AudioSocket URI
         full_audiosocket_uri_with_uuid = f"ws://{app_config.AUDIOSOCKET_HOST}:{app_config.AUDIOSOCKET_PORT}/callaudio/{self.asterisk_call_specific_uuid}"
         logger.info(f"[CallAttemptHandler:{self.call_id}] AudioSocket URI will be: {full_audiosocket_uri_with_uuid}")
         
@@ -103,8 +114,10 @@ class CallAttemptHandler:
 
 
         
+        # Pass UUID, dial string, and OpenAI session ID to dialplan
         vars_to_pass = f"{self.asterisk_call_specific_uuid}|{dial_string_for_dialplan}"
-        
+        logger.info(f"[CallAttemptHandler:{self.call_id}] Passing to dialplan: UUID={self.asterisk_call_specific_uuid}")
+
 
                    # Define variables for clarity
         #call_attempt_id_var = f"_CALL_ATTEMPT_ID={self.call_id}"
@@ -143,9 +156,8 @@ class CallAttemptHandler:
         
         if response and response.get("Response") == "Success":
             logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number}. ActionID: {self.originate_action_id}. Awaiting events.")
-            # Save the generated asterisk_call_specific_uuid to the database
-            # The `call_uuid` parameter in _update_call_status_db maps to the 'call_uuid' column in the DB
-            await self._update_call_status_db(CallStatus.ORIGINATING, call_uuid=self.asterisk_call_specific_uuid) # Store the new UUID
+            # Update only the status - UUID is already in database
+            await self._update_call_status_db(CallStatus.ORIGINATING)
             return True
         else:
             err_msg = response.get('Message', 'Unknown error') if response else "No response from AMI client"
