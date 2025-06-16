@@ -122,6 +122,7 @@ Local Channel for Call Structure (Decision from v11.0, Current Dialplan):
 
 Python AMI originates to Local/s@opendeep-ai-leg.
 
+
 Originate action's Context directs second leg to [opendeep-human-leg].
 
 [opendeep-ai-leg] handles Answer() and AudioSocket().
@@ -266,3 +267,32 @@ Refine audio buffering, chunking strategies, and AI interaction logic based on t
 Secondary (Lower Priority for Immediate Next Session):
 
 Investigate CallAttemptHandler / VarSet Event Issue: Once the core AI audio path is functional, revisit the "No Asterisk UniqueID established for event VarSet" logging in CallAttemptHandler to ensure robust AMI event correlation and call state tracking.
+
+5. AUDIO INTEGRATION FIXES
+
+We've successfully implemented the OpenAI real-time audio integration with the following key improvements:
+
+1. Dedicated Audio Processing Architecture:
+   - Created a dedicated `_listen_for_openai_responses` task that continuously listens for audio from OpenAI
+   - Implemented separate audio buffers for caller and AI audio (24kHz) to enable high-quality stereo recordings
+   - Added proper synchronization with asyncio locks to prevent race conditions
+
+2. Enhanced Audio Quality:
+   - Implemented proper audio resampling between 8kHz (Asterisk) and 24kHz (OpenAI)
+   - Added audio gain control to ensure AI responses are clearly audible
+   - Optimized frame timing at 15ms intervals for smooth audio playback
+
+3. Improved Recording Capabilities:
+   - Enhanced WAV file generation to create stereo recordings with caller audio in the left channel and AI audio in the right channel
+   - Maintained 24kHz sample rate for recordings to preserve audio quality
+
+4. Robust Error Handling:
+   - Added comprehensive error handling for OpenAI client operations
+   - Implemented proper task cancellation and resource cleanup
+   - Added detailed logging for debugging audio processing issues
+
+These improvements ensure that audio flows properly in both directions:
+- Caller audio → AudioSocketHandler → OpenAI (for transcription and processing)
+- OpenAI → AudioSocketHandler → Caller (for AI responses)
+
+The system now maintains a stable connection with Asterisk while properly processing audio through OpenAI's real-time APIs.
