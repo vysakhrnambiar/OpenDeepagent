@@ -224,7 +224,7 @@ class CallAttemptHandler:
 
         event_name = event.get("Event")
         action_id_in_event = event.get("ActionID")
-        unique_id_from_event = event.get("UniqueID")
+        unique_id_from_event = event.get("Uniqueid")
         linked_id_from_event = event.get("Linkedid")
         channel_from_event = event.get("Channel")
 
