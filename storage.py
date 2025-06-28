@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v12)
+# Replacement: database/db_manager.py + direct file operations in services
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original storage manager for call recordings and transcripts.
+#                    Replaced by database-driven storage with SQLite and direct
+#                    file operations within individual services as needed.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

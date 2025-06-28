@@ -1,3 +1,16 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v12)
+# Replacement: audio_processing_service/openai_realtime_client.py + audio_socket_handler.py
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original standalone implementation with direct OpenAI Realtime
+#                    integration before modular service architecture was developed.
+#                    Contains working audio processing logic that may be useful for
+#                    reference when enhancing current system.
+# ===============================================================================
 import asyncio
 import numpy as np
 import uuid

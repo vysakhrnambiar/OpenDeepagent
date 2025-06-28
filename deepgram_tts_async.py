@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Experimental development phases (v13-v15)
+# Replacement: N/A - Current system uses OpenAI Realtime API for TTS
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Standalone Deepgram TTS implementation for experimental
+#                    hybrid approach (OpenAI STT+LLM + Deepgram TTS). Current
+#                    system uses full OpenAI Realtime API instead.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

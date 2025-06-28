@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v12)
+# Replacement: common/logger_setup.py
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original logging setup before modular architecture.
+#                    Used custom encoding handler for UTF-8 support. Replaced by
+#                    centralized logger_setup.py with improved configuration management.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

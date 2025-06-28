@@ -40,19 +40,35 @@ DEFINE NEXT STEPS: Section 4 must always contain a clear, actionable, and specif
 2. PROJECT OVERVIEW & CURRENT STATE
 2.1. Version & Status
 
-Project Version: 16.0
+Project Version: 17.0
 
 Project Goal: To build a robust, multi-tenant, AI-powered outbound calling system featuring a conversational UI for task definition, an orchestrator for scheduling, a real-time voice AI for calls, an analysis AI for outcomes, and a strategic lifecycle manager for all tasks.
 
-Current Development Phase: Phase 3a (AI Integration - OpenAI Realtime Client).
+Current Development Phase: Phase 3b (Function Calling Implementation - OpenAI Realtime API).
 
-Current Focus: Integrating OpenAI real-time audio processing into the established bidirectional audio path. This involves replacing the current echo functionality in AudioSocketHandler with calls to an OpenAIRealtimeClient.
+Current Focus: Implementing function calling capabilities in OpenAI Realtime API to enable AI agent autonomous actions: end_call(), send_dtmf(), and reschedule_call(). This includes complete call lifecycle automation from AI decision to system cleanup.
 
-Next Major Architectural Step: Implement the OpenAIRealtimeClient and integrate it with AudioSocketHandler to process live call audio from Asterisk and send AI-generated audio responses back to Asterisk.
+Next Major Architectural Step: Add tools configuration and function call event handlers to OpenAIRealtimeClient, implement function execution system with Redis command integration for autonomous call management.
 
 2.2. Changelog / Revision History
 
-v16.0 (Current Version):
+v17.0 (Current Version):
+
+Critical Analysis: Function Calling Infrastructure Gap Identified.
+
+Comprehensive system analysis revealed that while function definitions exist in prompts (end_call, send_dtmf, reschedule_call) and Redis command infrastructure is present, the OpenAI Realtime client lacks function calling implementation.
+
+Current End Call Flow Analysis: System relies on manual user hangup → Asterisk closure → AudioSocketHandler cleanup. AI cannot autonomously end calls despite having end_call() defined in prompts.
+
+Missing Components Identified:
+- Tools configuration in OpenAI session setup
+- Function call event handlers (response.function_call_delta, response.function_call_output)
+- Function execution system to bridge AI decisions with Redis commands
+- DTMF sending capability (receiving exists but not sending)
+
+Architecture Decision: Implement complete function calling pipeline: AI decision → OpenAI function call → Redis command → AudioSocketHandler execution → Database update → Session cleanup.
+
+v16.0:
 
 Major Milestone: Bidirectional Audio Confirmed with Echo Functionality & Optimized Timing.
 
@@ -117,6 +133,16 @@ Asterisk to Python: Confirmed working. Audio from an answered PJSIP call is rece
 Python to Asterisk: Confirmed working via echo functionality. Python can successfully send audio frames back to Asterisk that are audible on the PJSIP phone.
 
 Frame Timing (Key Insight from v16.0): Stabilized audio frame exchange at 15ms intervals has proven effective for maintaining a stable connection and perceived real-time audio flow for the echo. This will be the basis for AI interaction timing.
+
+Function Calling Architecture (Decision from v17.0 - Critical Implementation Gap):
+
+Current State: AI agent has end_call(), send_dtmf(), reschedule_call() defined in REALTIME_CALL_LLM_BASE_INSTRUCTIONS but cannot execute them.
+
+Required Implementation: OpenAI Realtime client needs tools configuration in session setup, function call event handlers, and execution system.
+
+End Call Flow Design: AI calls end_call() → OpenAI function call event → Execute function in client → Send RedisEndCallCommand → AudioSocketHandler processes → Update CallStatus to COMPLETED_AI_HANGUP → Cleanup sequence (save audio, close OpenAI, cancel tasks) → Database finalization.
+
+DTMF Integration: System can receive DTMF (TYPE_DTMF frames) but lacks sending capability. Implementation needed: RedisDTMFCommand → AudioSocketHandler → Send TYPE_DTMF frames to Asterisk.
 
 Local Channel for Call Structure (Decision from v11.0, Current Dialplan):
 
@@ -190,9 +216,15 @@ llm_integrations/* [Modified/Created] - LLM client integrations.
 
 tools/* [Modified/Created] - External information retrieval tools.
 
-Planned Components (Focus for Current/Next Phase):
+Function Calling Components (Focus for Current Phase):
 
-audio_processing_service/openai_realtime_client.py [Planned] - To be created for real-time AI audio processing. This is the immediate next implementation task.
+audio_processing_service/openai_realtime_client.py [Created, Needs Function Calling] - Real-time AI audio client exists but lacks tools configuration and function call handlers. Requires implementation of:
+  - Tools array in session configuration (end_call, send_dtmf, reschedule_call function definitions)
+  - Function call event handlers for response.function_call_delta and response.function_call_output
+  - Function execution system with Redis command publishing
+  - Function result sending back to OpenAI to complete the loop
+
+Planned Components (Next Phase):
 
 post_call_analyzer_service/analysis_svc.py [Planned]
 
@@ -204,69 +236,100 @@ campaign_summarizer_service/* [Planned]
 
 4. IMMEDIATE NEXT STEPS (ACTION PLAN)
 
-With the bidirectional audio path and stable 15ms frame timing now confirmed via echo functionality, the immediate priority is to integrate real-time AI processing.
+With the OpenAI Realtime client already implemented for audio processing, the immediate priority is to add function calling capabilities for autonomous call management.
 
-Implement OpenAIRealtimeClient (audio_processing_service/openai_realtime_client.py):
+**PHASE 1: Core Function Calling Implementation**
 
-Create a new Python class/module for interacting with OpenAI's real-time audio APIs (e.g., Speech-to-Text and Text-to-Speech, or a combined audio-in/audio-out API if available and suitable).
+Implement Function Calling in OpenAIRealtimeClient (audio_processing_service/openai_realtime_client.py):
 
-This client should be capable of:
+Add tools configuration to session setup:
+```python
+"tools": [
+    {
+        "type": "function",
+        "name": "end_call",
+        "description": "Terminate the call when objectives are met or cannot proceed",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Reason for ending call"},
+                "outcome": {"type": "string", "enum": ["success", "failure", "dnd", "user_busy"]}
+            },
+            "required": ["reason", "outcome"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "send_dtmf",
+        "description": "Send DTMF tones for menu navigation",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "digits": {"type": "string", "pattern": "^[0-9*#]+$"}
+            },
+            "required": ["digits"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "reschedule_call",
+        "description": "Schedule a callback for later",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "time_description": {"type": "string"}
+            },
+            "required": ["reason", "time_description"]
+        }
+    }
+]
+```
 
-Receiving raw audio chunks (PCM, 8kHz, 16-bit mono).
+Add function call event handlers in _receive_loop():
+- Handle `response.function_call_delta` events for streaming function calls
+- Handle `response.function_call_output` events for complete function calls
+- Implement function execution logic with proper error handling
+- Send function results back to OpenAI to complete the conversation loop
 
-Sending these chunks to OpenAI for transcription.
+Implement function execution system:
+- end_call(): Publish RedisEndCallCommand to trigger AudioSocketHandler cleanup
+- send_dtmf(): Publish RedisDTMFCommand for DTMF transmission
+- reschedule_call(): Publish RedisRescheduleCommand for callback scheduling
 
-Receiving transcriptions.
+**PHASE 2: Complete End Call Automation**
 
-(Potentially) Sending text to an LLM for response generation (or this logic might reside in AudioSocketHandler initially).
+Enhance AudioSocketHandler DTMF capabilities:
+- Implement DTMF sending using AudioSocket TYPE_DTMF frames
+- Handle RedisDTMFCommand from Redis and send to Asterisk
+- Add proper logging and error handling for DTMF operations
 
-Sending text responses to OpenAI for speech synthesis.
+Verify End Call Flow Automation:
+- AI decision → end_call() function call → Redis command → AudioSocketHandler cleanup
+- Ensure proper call status update to COMPLETED_AI_HANGUP
+- Verify complete cleanup sequence: audio saving, OpenAI session close, task cancellation
+- Database finalization with proper duration and conclusion recording
 
-Receiving synthesized audio chunks.
+**PHASE 3: Integration Testing & Refinement**
 
-Focus on efficient, low-latency streaming interactions.
+Test autonomous call lifecycle:
+- Deploy with function calling enabled
+- Verify AI can successfully end calls when objectives met
+- Test DTMF sending for menu navigation scenarios
+- Validate reschedule functionality integration with orchestrator
 
-Integrate OpenAIRealtimeClient into AudioSocketHandler:
+Monitor and optimize:
+- Function call latency and reliability
+- Audio quality during function execution
+- Database consistency during autonomous operations
 
-Modify audio_processing_service/audio_socket_handler.py.
+**PHASE 4: Advanced Features (Future Implementation)**
 
-Remove or conditionalize the echo functionality.
-
-When audio frames are received from Asterisk:
-
-Buffer them appropriately (e.g., to match OpenAI's expected chunk sizes or to manage the 15ms Asterisk frames).
-
-Pass the buffered audio to the OpenAIRealtimeClient for STT.
-
-When the OpenAIRealtimeClient provides synthesized audio (from TTS):
-
-Frame this audio according to the AudioSocket protocol (TYPE_AUDIO, length, PCM payload).
-
-Send these frames to Asterisk via the self.writer.
-
-Establish Real-Time Audio Processing Pipeline:
-
-Ensure a smooth flow: Asterisk Audio In -> AudioSocketHandler -> OpenAIRealtimeClient (STT) -> (LLM, if separate) -> OpenAIRealtimeClient (TTS) -> AudioSocketHandler -> Asterisk Audio Out.
-
-Pay close attention to latency and concurrency management. Asynchronous operations will be critical.
-
-Implement Basic Error Handling & Logging for AI Components:
-
-Add robust error handling for API calls to OpenAI (e.g., network issues, API errors, rate limits).
-
-Implement comprehensive logging for all stages of the AI processing pipeline to aid debugging.
-
-Initial Testing & Refinement:
-
-Test with live calls.
-
-Monitor latency and audio quality.
-
-Refine audio buffering, chunking strategies, and AI interaction logic based on test results.
-
-Secondary (Lower Priority for Immediate Next Session):
-
-Investigate CallAttemptHandler / VarSet Event Issue: Once the core AI audio path is functional, revisit the "No Asterisk UniqueID established for event VarSet" logging in CallAttemptHandler to ensure robust AMI event correlation and call state tracking.
+Future capability for user information requests:
+- Implement request_user_info(question, timeout) function
+- Pause AI processing while waiting for user response
+- Resume with collected information or timeout handling
+- Integration with orchestrator for callback when user doesn't respond
 
 5. AUDIO INTEGRATION FIXES
 

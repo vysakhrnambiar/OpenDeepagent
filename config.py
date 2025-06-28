@@ -1,3 +1,16 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v12)
+# Replacement: config/app_config.py
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original configuration system before modular architecture.
+#                    Used for single-file implementations with direct config file
+#                    loading. Replaced by centralized app_config.py with environment
+#                    variable management.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

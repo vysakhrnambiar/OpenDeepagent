@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Experimental development phases (v13-v15)
+# Replacement: N/A - Current system uses Asterisk AudioSocket instead of Twilio
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Experimental Twilio Media Streams + OpenAI Realtime + Deepgram TTS
+#                    implementation. Current system uses Asterisk AudioSocket with
+#                    full OpenAI Realtime API for better control and integration.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

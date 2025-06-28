@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v15)
+# Replacement: llm_integrations/openai_form_client.py and similar modular LLM clients
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original LLM handler for direct OpenAI GPT-4o integration.
+#                    Replaced by modular LLM integration system that supports
+#                    multiple providers and specialized clients for different tasks.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

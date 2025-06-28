@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v15)
+# Replacement: Direct OpenAI Realtime API integration in audio_socket_handler.py
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original conversation manager for LLM + Twilio + Deepgram TTS
+#                    integration. Replaced by OpenAI Realtime API which handles
+#                    conversation flow internally without separate conversation manager.
+# ===============================================================================
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 

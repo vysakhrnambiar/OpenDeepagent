@@ -1,3 +1,15 @@
+# ===============================================================================
+# LEGACY FILE - NOT CURRENTLY USED IN ACTIVE SYSTEM (v16.0+)
+# 
+# Status: PRESERVED for reference/potential future use
+# Last Active: Early development phases (v1-v12)
+# Replacement: call_processor_service/call_initiator_svc.py + asterisk_ami_client.py
+# Safe to ignore: This file is not imported by main.py or active services
+# 
+# Historical Context: Original simple outbound call script using direct AMI commands.
+#                    Replaced by modular call processor service with proper error
+#                    handling, database integration, and lifecycle management.
+# ===============================================================================
 from asterisk.ami import AMIClient, SimpleAction
 from dotenv import load_dotenv
 import os
