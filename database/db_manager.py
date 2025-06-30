@@ -491,6 +491,28 @@ def log_transcript_entry(entry_data: CallTranscriptCreate) -> Optional[CallTrans
     finally:
         conn.close()
 
+def save_call_transcript(call_id: int, speaker: str, message: str) -> Optional[CallTranscript]:
+    """Saves a transcript entry for a call with automatic timestamp"""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO call_transcripts (call_id, speaker, message)
+            VALUES (?, ?, ?)
+        """, (call_id, speaker, message))
+        conn.commit()
+        entry_id = cursor.lastrowid
+        if entry_id:
+            cursor.execute("SELECT * FROM call_transcripts WHERE id = ?", (entry_id,))
+            row = cursor.fetchone()
+            return CallTranscript(**dict(row)) if row else None
+        return None
+    except sqlite3.Error as e:
+        logger.error(f"Database error saving transcript for call ID {call_id}: {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
 # --- MAIN TEST BLOCK (Illustrative, uses synchronous functions for setup) ---
 if __name__ == "__main__": # pragma: no cover
     initialize_database()
@@ -589,6 +611,31 @@ if __name__ == "__main__": # pragma: no cover
     else:
         logger.error(f"Could not retrieve task {task_id} for async tests.")
 
+
+def get_active_calls_count() -> int:
+    """Get count of calls that are currently active/in-progress"""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # Active statuses are those where the call is still ongoing
+        active_statuses = [
+            CallStatus.PENDING_ORIGINATION.value,
+            CallStatus.ORIGINATING.value,
+            CallStatus.DIALING.value,
+            CallStatus.RINGING.value,
+            CallStatus.ANSWERED.value,
+            CallStatus.LIVE_AI_HANDLING.value
+        ]
+        placeholders = ','.join(['?' for _ in active_statuses])
+        cursor.execute(f"SELECT COUNT(*) FROM calls WHERE status IN ({placeholders})", active_statuses)
+        count = cursor.fetchone()[0]
+        logger.debug(f"Active calls count from database: {count}")
+        return count
+    except sqlite3.Error as e:
+        logger.error(f"Database error in get_active_calls_count: {e}", exc_info=True)
+        return 0  # Return 0 on error to be safe
+    finally:
+        conn.close()
 
 # Add this function to database/db_manager.py
 

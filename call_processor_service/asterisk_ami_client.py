@@ -102,10 +102,6 @@ class AsteriskAmiClient:
             event_dict['Event'] = event_name_from_lib
             
         # ---- The rest of the dispatch logic from your correct version ----
-        if not self._connected and event_dict.get("Event") != "Shutdown":
-             logger.debug(f"Dispatch: Event {event_dict.get('Event')} received while not fully connected, ignoring.")
-             return
-
         action_id_in_event = event_dict.get("ActionID") # Get ActionID from the processed dict
         logger.debug(f"Dispatching Event to Async Listeners: Name='{event_dict.get('Event')}', ActionID='{action_id_in_event}', FullDict='{event_dict}'")
         

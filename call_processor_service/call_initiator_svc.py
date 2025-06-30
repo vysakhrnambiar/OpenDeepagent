@@ -34,8 +34,12 @@ class CallInitiatorService:
         
         self.active_call_attempt_ids: Set[int] = set()
         self._lock = asyncio.Lock()
+        self._sync_task: Optional[asyncio.Task] = None
         # self._loop is no longer needed here if db_manager functions are async def
         logger.info(f"CallInitiatorService initialized. Effective max concurrent calls: {self.max_concurrent_calls}")
+        
+        # Start background sync task
+        asyncio.create_task(self._start_background_sync())
 
     async def _register_call_attempt(self, call_id: int):
         async with self._lock:
@@ -126,9 +130,8 @@ class CallInitiatorService:
         except Exception as e:
             logger.error(f"[CallInitiator] Task ID: {task.id} - Exception during call initiation: {e}", exc_info=True)
             if call_record and call_record.id:
-                async with self._lock:
-                    if call_record.id in self.active_call_attempt_ids:
-                       await self._unregister_call_attempt(call_record.id)
+                # Fix: Remove nested locking - _unregister_call_attempt already has its own lock
+                await self._unregister_call_attempt(call_record.id)
                 logger.info(f"[CallInitiator] Attempting to update call_record {call_record.id} to FAILED_INTERNAL_ERROR") # New Log
                 update_call_success = await loop.run_in_executor( # Use executor for sync update_call_status
                     None,
@@ -148,3 +151,82 @@ class CallInitiatorService:
             )
             logger.info(f"[CallInitiator] Reverted Task ID {task.id} to PENDING status success: {revert_task_success}") # New Log
             return False
+
+    async def _start_background_sync(self):
+        """Start the periodic sync task"""
+        self._sync_task = asyncio.create_task(self._periodic_sync_task())
+        logger.info(f"[CallInitiator] Started periodic concurrency counter sync task (every 20 seconds)")
+
+    async def _periodic_sync_task(self):
+        """Background task to sync concurrency counter with database every 20 seconds"""
+        while True:
+            try:
+                await asyncio.sleep(20)  # Check every 20 seconds
+                
+                loop = asyncio.get_running_loop()
+                
+                # First, clean up any stale call records (older than 10 minutes in early states)
+                await loop.run_in_executor(None, self._cleanup_stale_calls)
+                
+                async with self._lock:
+                    current_counter = len(self.active_call_attempt_ids)
+                
+                if current_counter > 0:  # Only check DB if counter shows active calls
+                    actual_active_calls = await loop.run_in_executor(None, db_manager.get_active_calls_count)
+                    
+                    if actual_active_calls == 0:  # DB shows no active calls but counter > 0
+                        async with self._lock:
+                            logger.warning(f"[CallInitiator] Concurrency counter sync: Found {current_counter} phantom calls, resetting to 0")
+                            self.active_call_attempt_ids.clear()
+                    else:
+                        logger.debug(f"[CallInitiator] Concurrency counter sync: {current_counter} in-memory, {actual_active_calls} in DB - OK")
+            except Exception as e:
+                logger.error(f"[CallInitiator] Error in periodic sync task: {e}")
+    
+    def _cleanup_stale_calls(self):
+        """Clean up call records that have been stuck in early states for more than 10 minutes"""
+        from datetime import datetime, timedelta
+        from database.models import CallStatus
+        
+        try:
+            conn = db_manager.get_db_connection()
+            cursor = conn.cursor()
+            
+            # Find calls in early states older than 10 minutes
+            stale_threshold = datetime.now() - timedelta(minutes=10)
+            stale_statuses = [
+                CallStatus.PENDING_ORIGINATION.value,
+                CallStatus.ORIGINATING.value,
+                CallStatus.DIALING.value
+            ]
+            
+            cursor.execute("""
+                SELECT id, task_id, status, created_at
+                FROM calls
+                WHERE status IN (?, ?, ?)
+                AND created_at < ?
+            """, (*stale_statuses, stale_threshold.isoformat()))
+            
+            stale_calls = cursor.fetchall()
+            
+            if stale_calls:
+                logger.info(f"[CallInitiator] Found {len(stale_calls)} stale call records to cleanup")
+                
+                for call in stale_calls:
+                    call_id, task_id, status, created_at = call
+                    logger.warning(f"[CallInitiator] Cleaning up stale call ID {call_id} (Task {task_id}) stuck in {status} since {created_at}")
+                    
+                    # Update to failed status
+                    db_manager.update_call_status(
+                        call_id=call_id,
+                        status=CallStatus.FAILED_INTERNAL_ERROR,
+                        hangup_cause=f"Stale record cleanup - stuck in {status} for >10 minutes",
+                        call_conclusion="Call record was stuck and cleaned up automatically by sync task"
+                    )
+            else:
+                logger.debug(f"[CallInitiator] No stale call records found during cleanup check")
+                
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"[CallInitiator] Error during stale call cleanup: {e}", exc_info=True)

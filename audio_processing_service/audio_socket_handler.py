@@ -4,7 +4,7 @@ import struct
 import sys
 import uuid # For uuid.UUID()
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import os
 import wave # For saving WAV files
@@ -257,12 +257,12 @@ class AudioSocketHandler:
                         header = struct.pack("!BH", TYPE_AUDIO, len(chunk_to_send))
                         self.writer.write(header + chunk_to_send)
                         await self.writer.drain()
-                        logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent buffered audio frame")
+                        # logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent buffered audio frame")
                     else:
                         # Send pre-generated silent frame to maintain connection
                         self.writer.write(self.silent_frame_header + self.silent_frame)
                         await self.writer.drain()
-                        logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent silent frame")
+                        # logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent silent frame")
                     
                     await asyncio.sleep(0.015)  # Crucial timing
                 else:
@@ -345,11 +345,20 @@ class AudioSocketHandler:
                                 call_specific_prompt = task_record.generated_agent_prompt
                         
                         from audio_processing_service.openai_realtime_client import OpenAIRealtimeClient
+                        if not app_config.OPENAI_API_KEY:
+                            logger.error(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] OpenAI API Key not configured. Cannot start AI client.")
+                            self._stop_event.set()
+                            return
+
                         self.openai_client = OpenAIRealtimeClient(
                             call_specific_prompt=call_specific_prompt,
                             openai_api_key=app_config.OPENAI_API_KEY,
-                            loop=self.loop
+                            loop=self.loop,
+                            redis_client=self.redis_client
                         )
+                        # Set context for function calling
+                        self.openai_client.call_id = self.call_id
+                        
                         conn_success = await self.openai_client.connect_and_initialize()
                         if conn_success:
                             self._openai_ready = True
@@ -388,7 +397,7 @@ class AudioSocketHandler:
 
                     if frame_msg_type == TYPE_AUDIO:
                         if frame_payload:
-                            logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Received AUDIO frame, len={frame_payload_len}")
+                            # logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Received AUDIO frame, len={frame_payload_len}")
                             self._incoming_audio_frames.append(frame_payload) # Buffer the audio for saving
                             
                             # Store caller audio for recording (24kHz)
@@ -403,7 +412,7 @@ class AudioSocketHandler:
                             if self._openai_ready and self.openai_client and self.openai_client.is_connected:
                                 if audio_np_24khz.size > 0:
                                     await self.openai_client.send_audio_chunk(audio_np_24khz.tobytes())
-                                    logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent audio to OpenAI, len={frame_payload_len}")
+                                    # logger.debug(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Sent audio to OpenAI, len={frame_payload_len}")
                         else:
                             logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Received AUDIO frame with zero payload.")
 

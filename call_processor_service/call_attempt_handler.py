@@ -20,6 +20,7 @@ from common.logger_setup import setup_logger
 from common.redis_client import RedisClient
 from common.data_models import RedisDTMFCommand, RedisEndCallCommand
 from call_processor_service.asterisk_ami_client import AsteriskAmiClient, AmiAction
+from audio_processing_service.openai_realtime_client import OpenAIRealtimeClient
 
 logger = setup_logger(__name__, level_str=app_config.LOG_LEVEL)
 
@@ -56,9 +57,10 @@ class CallAttemptHandler:
         self._redis_listener_task: Optional[asyncio.Task] = None
         self._ami_event_listener_task_active = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None # For run_in_executor
-
+        self._channel_identified_event = asyncio.Event()
+ 
         logger.info(f"[CallAttemptHandler:{self.call_id}] Initialized for Task ID: {self.task_id}, User ID: {self.task_user_id}")
-
+ 
     async def _originate_call(self) -> bool:
         logger.info(f"[CallAttemptHandler:{self.call_id}] Preparing to originate call.")
         if self._loop is None: self._loop = asyncio.get_running_loop()
@@ -169,11 +171,20 @@ class CallAttemptHandler:
         logger.debug(f"[CallAttemptHandler:{self.call_id}] Received Redis command on {channel}: {command_data_dict}")
         command_type = command_data_dict.get("command_type")
 
+        # If channel is not known yet, wait for the AMI event processor to identify it.
         if not self.asterisk_channel_name:
-            logger.warning(f"[CallAttemptHandler:{self.call_id}] Cannot process Redis command '{command_type}', Asterisk channel/ID is not yet known.")
+            logger.warning(f"[CallAttemptHandler:{self.call_id}] Asterisk channel not yet known for command '{command_type}'. Waiting for identification event...")
+            try:
+                await asyncio.wait_for(self._channel_identified_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.error(f"[CallAttemptHandler:{self.call_id}] Timed out waiting for channel identification. Cannot process Redis command '{command_type}'.")
+                return
+        
+        if not self.asterisk_channel_name:
+            logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot process Redis command '{command_type}', Asterisk channel could not be identified in time, even after event.")
             return
 
-        if command_type == RedisDTMFCommand.model_fields['command_type'].default:
+        if command_type == "send_dtmf":
             try:
                 cmd = RedisDTMFCommand(**command_data_dict)
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Processing DTMF command: sending '{cmd.digits}' to channel {self.asterisk_channel_name}")
@@ -186,7 +197,7 @@ class CallAttemptHandler:
             except Exception as e:
                 logger.error(f"[CallAttemptHandler:{self.call_id}] Error processing DTMF command: {e}", exc_info=True)
         
-        elif command_type == RedisEndCallCommand.model_fields['command_type'].default:
+        elif command_type == "end_call":
             try:
                 cmd = RedisEndCallCommand(**command_data_dict)
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Processing EndCall command for channel {self.asterisk_channel_name}. Reason: {cmd.reason}")
@@ -239,6 +250,7 @@ class CallAttemptHandler:
                 self.asterisk_unique_id = unique_id_from_event
                 if channel_from_event: self.asterisk_channel_name = channel_from_event
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Discovered Asterisk internal UniqueID: {self.asterisk_unique_id} via ActionID match on event {event_name}. Channel: {self.asterisk_channel_name}")
+                if self.asterisk_channel_name: self._channel_identified_event.set()
                 # Update DB status or channel info. Storing the channel is useful.
                 # The call_uuid passed here is self.asterisk_call_specific_uuid (our generated one for audiosocket path)
                 # which should have been saved to DB right after sending Originate.
@@ -249,15 +261,33 @@ class CallAttemptHandler:
             elif event_name == "VarSet":
                 variable_name_from_event = event.get("Variable")
                 value_from_event = event.get("Value")
-                # Ensure dialplan variable name matches "_OPENDDEEP_CALL_UUID"
-                if (variable_name_from_event and 
-                    variable_name_from_event.upper() == "_OPENDDEEP_CALL_UUID" and 
-                    value_from_event == self.asterisk_call_specific_uuid and # Compare with our generated UUID
-                    unique_id_from_event):
+                
+                # We need to identify the call by the UUID we generated.
+                # The variable name from the dialplan could be one of two possibilities based on recent changes.
+                # Let's check for both to be robust.
+                var_name_upper = variable_name_from_event.upper() if variable_name_from_event else ""
+                
+                # Check 1: The variable is `OPENDDEEP_VARS` and our UUID is *in* its value.
+                # This is set by the Originate command itself.
+                is_match_on_originate_vars = (var_name_upper == "OPENDDEEP_VARS" and
+                                              value_from_event and
+                                              self.asterisk_call_specific_uuid in value_from_event)
+
+                # Check 2: The variable is `_OPENDDEEP_CALL_UUID` and its value *is* our UUID.
+                # This is likely set by the dialplan logic itself.
+                is_match_on_dialplan_var = (var_name_upper == "_OPENDDEEP_CALL_UUID" and
+                                            value_from_event == self.asterisk_call_specific_uuid)
+
+                if (is_match_on_originate_vars or is_match_on_dialplan_var) and unique_id_from_event:
                     
                     self.asterisk_unique_id = unique_id_from_event
                     if channel_from_event: self.asterisk_channel_name = channel_from_event
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Discovered Asterisk internal UniqueID: {self.asterisk_unique_id} via VarSet for _OPENDDEEP_CALL_UUID. Channel: {self.asterisk_channel_name}")
+                    
+                    # Log which variable we matched on for easier debugging
+                    matched_var_name = "OPENDDEEP_VARS" if is_match_on_originate_vars else "_OPENDDEEP_CALL_UUID"
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Discovered Asterisk internal UniqueID: {self.asterisk_unique_id} via VarSet for {matched_var_name}. Channel: {self.asterisk_channel_name}")
+                    
+                    if self.asterisk_channel_name: self._channel_identified_event.set()
                     await self._update_call_status_db(self.call_record.status, asterisk_channel=self.asterisk_channel_name, call_uuid=self.asterisk_call_specific_uuid)
                     # No return here, fall through to Phase 2.
             
@@ -317,6 +347,11 @@ class CallAttemptHandler:
 
             if sub_event == "Begin" or (event_name == "DialBegin"): # Handle DialBegin too
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Begin to DestChannel: {dest_channel} (DestUID: {event.get('DestUniqueID')})")
+                if dest_channel and self.asterisk_channel_name != dest_channel:
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Updating tracked channel for hangup/DTMF from '{self.asterisk_channel_name}' to DestChannel: '{dest_channel}'")
+                    self.asterisk_channel_name = dest_channel
+                    if self.asterisk_channel_name: self._channel_identified_event.set()
+                
                 if self.call_record.status not in [CallStatus.RINGING, CallStatus.ANSWERED, CallStatus.LIVE_AI_HANDLING]:
                     await self._update_call_status_db(CallStatus.RINGING)
             
@@ -477,6 +512,19 @@ class CallAttemptHandler:
                 )
         finally:
             logger.info(f"[CallAttemptHandler:{self.call_id}] Starting final cleanup for lifecycle.")
+            
+            # CRITICAL: Hangup the Asterisk call if it's still active
+            if self.asterisk_channel_name and not self.call_end_time:
+                logger.warning(f"[CallAttemptHandler:{self.call_id}] Handler terminating but call still active. Sending Hangup to Asterisk channel: {self.asterisk_channel_name}")
+                try:
+                    hangup_action = AmiAction("Hangup", Channel=self.asterisk_channel_name, Cause="16")
+                    response = await self.ami_client.send_action(hangup_action, timeout=2.0)
+                    if response and response.get("Response") == "Success":
+                        logger.info(f"[CallAttemptHandler:{self.call_id}] Emergency hangup sent successfully for channel {self.asterisk_channel_name}")
+                    else:
+                        logger.error(f"[CallAttemptHandler:{self.call_id}] Emergency hangup failed. Response: {response}")
+                except Exception as e:
+                    logger.error(f"[CallAttemptHandler:{self.call_id}] Exception during emergency hangup: {e}", exc_info=True)
             
             if self._redis_listener_task and not self._redis_listener_task.done():
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Cancelling Redis listener task.")

@@ -20,6 +20,7 @@ if __name__ == '__main__' or not __package__: # Checks if run as script or if pa
 # Assuming project structure allows this import
 from config.app_config import app_config # For OPENAI_REALTIME_MODEL, OPENAI_CONNECT_RETRIES etc.
 from common.logger_setup import setup_logger
+from common.redis_client import RedisClient
 
 logger = setup_logger(__name__, level_str=app_config.LOG_LEVEL)
 
@@ -28,6 +29,7 @@ class OpenAIRealtimeClient:
                  call_specific_prompt: str,
                  openai_api_key: str,
                  loop: asyncio.AbstractEventLoop,
+                 redis_client: Optional['RedisClient'] = None, # Add redis_client here
                  model_name: str = app_config.OPENAI_REALTIME_LLM_MODEL,
                  connect_retries: int = 3,
                  connect_retry_delay_s: float = 2.0,
@@ -53,6 +55,10 @@ class OpenAIRealtimeClient:
         self._max_connect_retries: int = connect_retries
         self._base_connect_retry_delay_s: float = connect_retry_delay_s
         self._initial_connection_successful: bool = False # To differentiate initial connect vs. reconnect
+        
+        # Context for function calling (set by AudioSocketHandler)
+        self.call_id: Optional[int] = None
+        self.redis_client = redis_client
 
         logger.info(f"[OpenAIClient:{id(self)}] Initialized for prompt (first 50 chars): '{self.call_specific_prompt[:50]}...'")
 
@@ -86,6 +92,67 @@ class OpenAIRealtimeClient:
                             "voice": "alloy",
                             "input_audio_format": "pcm16",
                             "output_audio_format": "pcm16",
+                            "input_audio_transcription": {
+                                "model": "whisper-1",
+                                "language": "en"
+                            },
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "end_call",
+                                    "description": "Terminate the call when objectives are met or cannot proceed",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "reason": {
+                                                "type": "string",
+                                                "description": "Reason for ending the call"
+                                            },
+                                            "outcome": {
+                                                "type": "string",
+                                                "enum": ["success", "failure", "dnd", "user_busy"],
+                                                "description": "Call outcome type"
+                                            }
+                                        },
+                                        "required": ["reason", "outcome"]
+                                    }
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "send_dtmf",
+                                    "description": "Send DTMF tones for menu navigation",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "digits": {
+                                                "type": "string",
+                                                "pattern": "^[0-9*#]+$",
+                                                "description": "DTMF digits to send (0-9, *, #)"
+                                            }
+                                        },
+                                        "required": ["digits"]
+                                    }
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "reschedule_call",
+                                    "description": "Schedule a callback for later",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "reason": {
+                                                "type": "string",
+                                                "description": "Reason for rescheduling"
+                                            },
+                                            "time_description": {
+                                                "type": "string",
+                                                "description": "When to call back (e.g., 'tomorrow at 10 AM')"
+                                            }
+                                        },
+                                        "required": ["reason", "time_description"]
+                                    }
+                                }
+                            ],
                             "turn_detection": {
                                 "type": "server_vad",
                                 "threshold": 0.3,
@@ -212,9 +279,40 @@ class OpenAIRealtimeClient:
                     if isinstance(transcript_content, dict): full_transcript = transcript_content.get('text', '[No text in dict]')
                     elif isinstance(transcript_content, str): full_transcript = transcript_content
                     logger.info(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI Tx FINAL: \"{full_transcript}\"")
+                    # Save assistant transcript to database
+                    if full_transcript.strip() and full_transcript != "[No full transcript text provided]":
+                        asyncio.create_task(self._save_transcript_to_db("agent", full_transcript))
                 
                 elif msg_type == "response.done":
                     logger.info(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI Event: response.done (AI turn finished).")
+                
+                elif msg_type == "response.function_call_output":
+                    function_call_data = data.get("output")
+                    if function_call_data:
+                        logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Function call received: {function_call_data}")
+                        asyncio.create_task(self._execute_function_call(function_call_data, data.get("call_id")))
+
+                elif msg_type == "response.function_call_arguments.done":
+                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Received function call arguments done event: {str(message_raw)[:500]}")
+                    function_name = data.get("name")
+                    arguments_str = data.get("arguments", "{}")
+                    openai_func_call_id = data.get("call_id")
+                    
+                    try:
+                        arguments = json.loads(arguments_str)
+                        function_call_data = {
+                            "name": function_name,
+                            "arguments": arguments
+                        }
+                        asyncio.create_task(self._execute_function_call(function_call_data, openai_func_call_id))
+                    except json.JSONDecodeError:
+                        logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Failed to parse function call arguments JSON: {arguments_str}")
+                
+                elif msg_type == "conversation.item.input_audio_transcription.completed":
+                    user_transcript = data.get('transcript', '')
+                    if user_transcript.strip():
+                        logger.info(f"[OpenAIClient:{self.session_id_from_openai}] User said: \"{user_transcript}\"")
+                        asyncio.create_task(self._save_transcript_to_db("user", user_transcript))
                 
                 # Log other relevant messages for debugging, less verbosely for frequent ones
                 elif msg_type in ["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped", 
@@ -225,8 +323,12 @@ class OpenAIRealtimeClient:
                                   "response.content_part.done", "response.output_item.done", 
                                   "rate_limits.updated"]:
                     logger.debug(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI Info Event: '{msg_type}'")
-                else: 
-                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI Unknown Msg Type '{msg_type}': {str(message_raw)[:200]}...")
+                else:
+                    # Enhanced logging to catch function call events we might be missing
+                    if "function" in msg_type.lower() or "call" in msg_type.lower():
+                        logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] *** POTENTIAL FUNCTION CALL EVENT *** Type='{msg_type}': {str(message_raw)[:500]}...")
+                    else:
+                        logger.info(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI Unknown Msg Type '{msg_type}': {str(message_raw)[:200]}...")
 
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI WebSocket closed in _receive_loop (Code: {e.code}, Reason: '{e.reason}').")
@@ -347,6 +449,162 @@ class OpenAIRealtimeClient:
 
         logger.info(f"[OpenAIClient:{self.session_id_from_openai or id(self)}] OpenAI client closed.")
 
+    async def _execute_function_call(self, function_call_data: dict, call_id: Optional[str] = None):
+        """Execute function calls from OpenAI and send results back"""
+        try:
+            function_name = function_call_data.get("name")
+            arguments = function_call_data.get("arguments", {})
+            
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] *** EXECUTING FUNCTION CALL *** Function: {function_name}, Args: {arguments}")
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Context check - call_id: {self.call_id}, redis_client: {self.redis_client is not None}")
+            
+            if function_name == "end_call":
+                result = await self._execute_end_call(arguments)
+                # Send function result back to OpenAI
+                await self._send_function_result(call_id, function_name, result)
+            elif function_name == "send_dtmf":
+                result = await self._execute_send_dtmf(arguments)
+                await self._send_function_result(call_id, function_name, result)
+            elif function_name == "reschedule_call":
+                result = await self._execute_reschedule_call(arguments)
+                await self._send_function_result(call_id, function_name, result)
+            else:
+                logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Unknown function: {function_name}")
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error executing function call: {e}", exc_info=True)
+
+    async def _execute_end_call(self, arguments: dict) -> dict:
+        """Execute end_call function and publish Redis command"""
+        try:
+            reason = arguments.get("reason", "AI decided to end call")
+            outcome = arguments.get("outcome", "success")
+            
+            # Import here to avoid circular imports
+            from common.data_models import RedisEndCallCommand
+            
+            if self.call_id and self.redis_client:
+                command = RedisEndCallCommand(
+                    call_attempt_id=self.call_id,
+                    reason=reason,
+                    outcome=outcome
+                )
+                
+                # Publish Redis command to trigger CallAttemptHandler hangup
+                channel = f"call_commands:{self.call_id}"
+                success = await self.redis_client.publish_command(channel, command.model_dump())
+                
+                if success:
+                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Published end_call command. Reason: {reason}, Outcome: {outcome}")
+                    return {"status": "success", "message": f"Call termination initiated. {reason}"}
+                else:
+                    logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Failed to publish end_call command")
+                    return {"status": "error", "message": "Failed to terminate call"}
+            else:
+                logger.error(f"[OpenAIClient:{self.session_id_from_openai}] No call_id or Redis client available for end_call")
+                return {"status": "error", "message": "System error: cannot terminate call"}
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in _execute_end_call: {e}", exc_info=True)
+            return {"status": "error", "message": "Internal error executing end_call"}
+
+    async def _execute_send_dtmf(self, arguments: dict) -> dict:
+        """Execute send_dtmf function and publish Redis command"""
+        try:
+            digits = arguments.get("digits", "")
+            
+            from common.data_models import RedisDTMFCommand
+            
+            if self.call_id and self.redis_client:
+                command = RedisDTMFCommand(
+                    call_attempt_id=self.call_id,
+                    digits=digits
+                )
+                
+                channel = f"call_commands:{self.call_id}"
+                success = await self.redis_client.publish_command(channel, command.model_dump())
+                
+                if success:
+                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Published send_dtmf command. Digits: {digits}")
+                    return {"status": "success", "message": f"DTMF digits {digits} sent"}
+                else:
+                    logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Failed to publish send_dtmf command")
+                    return {"status": "error", "message": "Failed to send DTMF"}
+            else:
+                logger.error(f"[OpenAIClient:{self.session_id_from_openai}] No call_id or Redis client available for send_dtmf")
+                return {"status": "error", "message": "System error: cannot send DTMF"}
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in _execute_send_dtmf: {e}", exc_info=True)
+            return {"status": "error", "message": "Internal error executing send_dtmf"}
+
+    async def _execute_reschedule_call(self, arguments: dict) -> dict:
+        """Execute reschedule_call function and publish Redis command"""
+        try:
+            reason = arguments.get("reason", "User requested callback")
+            time_description = arguments.get("time_description", "later")
+            
+            from common.data_models import RedisRescheduleCommand
+            
+            if self.call_id and self.redis_client:
+                command = RedisRescheduleCommand(
+                    call_attempt_id=self.call_id,
+                    reason=reason,
+                    time_description=time_description
+                )
+                
+                channel = f"call_commands:{self.call_id}"
+                success = await self.redis_client.publish_command(channel, command.model_dump())
+                
+                if success:
+                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Published reschedule_call command. Reason: {reason}, Time: {time_description}")
+                    return {"status": "success", "message": f"Call rescheduled for {time_description}"}
+                else:
+                    logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Failed to publish reschedule_call command")
+                    return {"status": "error", "message": "Failed to reschedule call"}
+            else:
+                logger.error(f"[OpenAIClient:{self.session_id_from_openai}] No call_id or Redis client available for reschedule_call")
+                return {"status": "error", "message": "System error: cannot reschedule call"}
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in _execute_reschedule_call: {e}", exc_info=True)
+            return {"status": "error", "message": "Internal error executing reschedule_call"}
+
+    async def _send_function_result(self, call_id: Optional[str], function_name: str, result: dict):
+        """Send function execution result back to OpenAI"""
+        try:
+            if self._websocket and not self._websocket.closed and call_id:
+                result_message = {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result)
+                    }
+                }
+                await self._websocket.send(json.dumps(result_message))
+                logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Sent function result for {function_name}")
+            else:
+                logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot send function result, WebSocket not connected or no call_id")
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error sending function result: {e}", exc_info=True)
+
+    async def _save_transcript_to_db(self, speaker: str, message: str):
+        """Save transcript entry to database with proper ordering"""
+        try:
+            if self.call_id:
+                # Import db_manager here to avoid circular imports
+                from database import db_manager
+                
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, db_manager.save_call_transcript,
+                                         self.call_id, speaker, message)
+                logger.debug(f"[OpenAIClient:{self.session_id_from_openai}] Saved transcript: {speaker}: {message[:50]}...")
+            else:
+                logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot save transcript, no call_id available")
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error saving transcript: {e}", exc_info=True)
+
 
 # --- Basic Test Block ---
 async def main_test_openai_client():
@@ -360,7 +618,8 @@ async def main_test_openai_client():
     client = OpenAIRealtimeClient(
         call_specific_prompt=test_prompt,
         openai_api_key=app_config.OPENAI_API_KEY,
-        loop=asyncio.get_running_loop()
+        loop=asyncio.get_running_loop(),
+        redis_client=None # Not needed for this basic test
     )
 
     if not await client.connect_and_initialize():
