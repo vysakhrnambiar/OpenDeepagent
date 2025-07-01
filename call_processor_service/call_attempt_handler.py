@@ -154,10 +154,14 @@ class CallAttemptHandler:
         logger.info(f"[CallAttemptHandler:{self.call_id}] Originate ActionID set to: {self.originate_action_id}")
 
         self.call_start_time = datetime.now()
-        response = await self.ami_client.send_action(originate_action, timeout=1.0)
+        response = await self.ami_client.send_action(
+            originate_action,
+            timeout=1.0,
+            event_callback=self._process_ami_event
+        )
         
         if response and response.get("Response") == "Success":
-            logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number}. ActionID: {self.originate_action_id}. Awaiting events.")
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Originate command sent successfully to Asterisk for phone: {target_phone_number}. ActionID: {self.originate_action_id}. Awaiting events via action-specific callback.")
             # Update only the status - UUID is already in database
             await self._update_call_status_db(CallStatus.ORIGINATING)
             return True
@@ -200,11 +204,26 @@ class CallAttemptHandler:
         elif command_type == "end_call":
             try:
                 cmd = RedisEndCallCommand(**command_data_dict)
+                
+                # --- DYNAMIC DELAY LOGIC ---
+                if cmd.final_message:
+                    # Estimate delay based on message length. Avg speaking rate is ~150 WPM.
+                    # 150 words / 60s = 2.5 words/sec. So, 1 word takes ~0.4s.
+                    # We add a small buffer.
+                    word_count = len(cmd.final_message.split())
+                    estimated_speech_duration_s = (word_count * 0.4) + 0.5 # 400ms per word + 500ms buffer
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Received final_message with {word_count} words. Waiting for {estimated_speech_duration_s:.2f}s before hangup.")
+                    await asyncio.sleep(estimated_speech_duration_s)
+                else:
+                    logger.warning(f"[CallAttemptHandler:{self.call_id}] No final_message in EndCall command. Hanging up immediately.")
+                # --- END DYNAMIC DELAY LOGIC ---
+
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Processing EndCall command for channel {self.asterisk_channel_name}. Reason: {cmd.reason}")
                 hangup_action = AmiAction("Hangup", Channel=self.asterisk_channel_name, Cause="16")
                 response = await self.ami_client.send_action(hangup_action)
                 if response and response.get("Response") == "Success":
                     logger.info(f"[CallAttemptHandler:{self.call_id}] Hangup command sent successfully for channel {self.asterisk_channel_name}.")
+                    self._stop_event.set() # Trigger the lifecycle to end now that hangup is sent.
                 else:
                     logger.error(f"[CallAttemptHandler:{self.call_id}] Failed to send Hangup command. Response: {response}")
             except Exception as e:
@@ -471,27 +490,22 @@ class CallAttemptHandler:
         logger.info(f"[CallAttemptHandler:{self.call_id}] Starting to manage call lifecycle.")
 
         # <<< START: MODIFIED LOGIC >>>
-        # 1. Start listening for AMI events BEFORE originating the call.
-        self.ami_client.add_generic_event_listener(self._process_ami_event)
-        self._ami_event_listener_task_active = True
-        logger.info(f"[CallAttemptHandler:{self.call_id}] Added generic AMI event listener.")
-
-        # 2. Start listening for Redis commands.
+        # 1. Start listening for Redis commands.
         self._redis_listener_task = asyncio.create_task(self._listen_for_redis_commands())
         
-        # 3. NOW, originate the call.
+        # 2. NOW, originate the call. The event listener is passed directly.
         origination_success = await self._originate_call()
         if not origination_success:
             logger.error(f"[CallAttemptHandler:{self.call_id}] Origination failed. Aborting lifecycle management.")
             # The failure is already handled inside _originate_call, but we must unregister the handler here.
             if self.unregister_callback:
                 await self.unregister_callback(self.call_id)
-            # The 'finally' block will handle cleanup of listeners.
-            return 
+            # The 'finally' block will handle cleanup.
+            return
         # <<< END: MODIFIED LOGIC >>>
 
         try:
-            # 4. Wait for the call to end (via stop_event set by an event handler).
+            # 3. Wait for the call to end (via stop_event set by an event handler).
             await self._stop_event.wait()
             logger.info(f"[CallAttemptHandler:{self.call_id}] Stop event received. Proceeding to cleanup.")
         except asyncio.CancelledError:
@@ -513,18 +527,10 @@ class CallAttemptHandler:
         finally:
             logger.info(f"[CallAttemptHandler:{self.call_id}] Starting final cleanup for lifecycle.")
             
-            # CRITICAL: Hangup the Asterisk call if it's still active
-            if self.asterisk_channel_name and not self.call_end_time:
-                logger.warning(f"[CallAttemptHandler:{self.call_id}] Handler terminating but call still active. Sending Hangup to Asterisk channel: {self.asterisk_channel_name}")
-                try:
-                    hangup_action = AmiAction("Hangup", Channel=self.asterisk_channel_name, Cause="16")
-                    response = await self.ami_client.send_action(hangup_action, timeout=2.0)
-                    if response and response.get("Response") == "Success":
-                        logger.info(f"[CallAttemptHandler:{self.call_id}] Emergency hangup sent successfully for channel {self.asterisk_channel_name}")
-                    else:
-                        logger.error(f"[CallAttemptHandler:{self.call_id}] Emergency hangup failed. Response: {response}")
-                except Exception as e:
-                    logger.error(f"[CallAttemptHandler:{self.call_id}] Exception during emergency hangup: {e}", exc_info=True)
+            # The primary hangup logic is now reliable. The emergency hangup in the finally block
+            # is causing a race condition where a second hangup is sent before the first one's
+            # event is processed. It is now safe to remove.
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Final cleanup initiated.")
             
             if self._redis_listener_task and not self._redis_listener_task.done():
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Cancelling Redis listener task.")
@@ -533,10 +539,8 @@ class CallAttemptHandler:
                 except asyncio.CancelledError: logger.info(f"[CallAttemptHandler:{self.call_id}] Redis listener task successfully cancelled during cleanup.")
                 except Exception as e_redis_cancel: logger.error(f"[CallAttemptHandler:{self.call_id}] Error awaiting cancelled Redis listener: {e_redis_cancel}")
             
-            if self._ami_event_listener_task_active:
-                self.ami_client.remove_generic_event_listener(self._process_ami_event)
-                self._ami_event_listener_task_active = False
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Removed generic AMI event listener during cleanup.")
+            # No need to remove a generic listener anymore. Action-specific listeners are cleaned up automatically.
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Cleanup: No generic AMI listener to remove.")
 
             # This check is important. If the call never properly ended (e.g. error before _handle_call_ended was called),
             # we need to make sure it's unregistered.

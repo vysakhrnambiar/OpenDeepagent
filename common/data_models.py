@@ -103,6 +103,7 @@ class RedisEndCallCommand(RedisCommandBase):
     call_attempt_id: int
     reason: str = Field("AI decided to end the call.", description="Reason for ending the call.", max_length=2000)
     outcome: str = Field(..., description="Call outcome: success, failure, dnd, user_busy", pattern="^(success|failure|dnd|user_busy)$")
+    final_message: Optional[str] = Field(None, description="The final message spoken by the AI, used for timing the hangup.")
 
 class RedisRescheduleCommand(RedisCommandBase):
     command_type: Literal["reschedule_call_trigger_analysis"] = "reschedule_call_trigger_analysis"

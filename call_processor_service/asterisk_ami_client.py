@@ -3,7 +3,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import Dict, Any, Callable, Awaitable, Optional, Set, Union, List
+from typing import Coroutine, Dict, Any, Callable, Awaitable, Optional, Set, Union, List
 # import re # Not directly used by our client code anymore
 from datetime import datetime
 import uuid
@@ -65,8 +65,9 @@ class AsteriskAmiClient:
         self._lock = asyncio.Lock()
 
         self._response_futures: Dict[str, asyncio.Future] = {}
-        self._event_listeners: Dict[str, Set[Callable[[Dict[str, Any]], Awaitable[None]]]] = {}
-        self._generic_event_listeners: Set[Callable[[Dict[str, Any]], Awaitable[None]]] = set()
+        self._action_event_callbacks: Dict[str, Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = {}
+        self._event_listeners: Dict[str, Set[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]]] = {}
+        self._generic_event_listeners: Set[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = set()
         
         self._connection_retry_delay = 5
         self._keepalive_interval = 540
@@ -113,10 +114,18 @@ class AsteriskAmiClient:
             for g_callback in list(self._generic_event_listeners):
                 asyncio.create_task(g_callback(event_dict))
 
+        if action_id_in_event and action_id_in_event in self._action_event_callbacks:
+            callback = self._action_event_callbacks[action_id_in_event]
+            asyncio.create_task(callback(event_dict))
+
         if action_id_in_event and event_name_to_dispatch and event_name_to_dispatch.endswith("Complete"):
             if action_id_in_event in self._response_futures:
                 logger.debug(f"Dispatch: Received completion event '{event_name_to_dispatch}' for ActionID {action_id_in_event}. "
                              "Note: Future for this ActionID might have already been resolved on initial response.")
+            if action_id_in_event in self._action_event_callbacks:
+                # Clean up the action-specific callback once the action is complete
+                del self._action_event_callbacks[action_id_in_event]
+                logger.debug(f"Dispatch: Removed action-specific event callback for completed ActionID {action_id_in_event}.")
 
 
     def _ami_worker_thread_main(self):
@@ -218,32 +227,40 @@ class AsteriskAmiClient:
                          last_keepalive_time = time.monotonic()
 
                 except thread_safe_queue.Empty:
-                    #if time.monotonic() - last_keepalive_time > self._keepalive_interval:
-                     #   logger.debug("Worker: Sending keepalive Ping.")
-                      #  try:
-                       #     ping_ami_action_obj = AmiAction('Ping') # Our helper makes ActionID
-                        #    ping_action_for_lib = SimpleAction('Ping', **ping_ami_action_obj.get_headers())
-                            
-                         #   ping_future = self._sync_ami_client.send_action(ping_action_for_lib)
-                          #  ping_response_obj = ping_future.response
-                            
-                           # if ping_response_obj and not ping_response_obj.is_error():
-                            #    logger.debug(f"Worker: AMI Ping successful. Details: {getattr(ping_response_obj, 'keys', {})}")
-                            #else: # Ping failed or timed out
-                             #   ping_err_msg = "Ping failed"
-                              #  if ping_response_obj and hasattr(ping_response_obj, 'keys'):
-                                #    ping_err_msg += f" - Response: {ping_response_obj.keys.get('Response', 'Error')}, Message: {ping_response_obj.keys.get('Message', 'Unknown')}"
-                               # elif ping_response_obj: ping_err_msg += f" - Unexpected obj: {str(ping_response_obj)[:100]}"
-                            #    else: ping_err_msg += " - No response object (timeout on future.response)"
-                             #   logger.warning(f"Worker: AMI Ping response issue: {ping_err_msg}")
-                              #  raise ConnectionAbortedError(f"Ping failure implies connection loss: {ping_err_msg}")
-                            #last_keepalive_time = time.monotonic()
+                    # The queue was empty. Instead of just waiting, send a Ping to keep the
+                    # underlying socket of the synchronous library active, which allows it to
+                    # process incoming events that are not direct responses to actions.
+                    # This is the workaround for the library not having a dedicated listen() mode.
+                    logger.debug("Worker: Action queue empty, sending Ping to process events.")
+                    try:
+                        # We don't need a full async future for this internal ping.
+                        # The library will add an ActionID if we don't provide one.
+                        ping_action_for_lib = SimpleAction('Ping')
                         
-
-                        #except Exception as e_ping: # Includes ConnectionAbortedError from above
-                         #   logger.error(f"Worker: Error during Ping processing: {e_ping}")
-                          #  raise ConnectionAbortedError(f"Ping processing failed, connection likely lost: {e_ping}") from e_ping
-                    pass
+                        ping_future = self._sync_ami_client.send_action(ping_action_for_lib)
+                        # Use a short timeout for the ping response. The main purpose is to
+                        # block on the socket and process any incoming data, not just the pong.
+                        ping_response_obj = ping_future.response # Blocks
+                        
+                        if ping_response_obj and not ping_response_obj.is_error():
+                            # Successfully received a Pong. The connection is alive and listening.
+                            logger.debug(f"Worker: AMI Ping-Pong successful. Connection active. Pong details: {getattr(ping_response_obj, 'keys', {})}")
+                        else: # Ping failed or timed out
+                            ping_err_msg = "Ping failed"
+                            if ping_response_obj and hasattr(ping_response_obj, 'keys'):
+                                ping_err_msg += f" - Response: {ping_response_obj.keys.get('Response', 'Error')}, Message: {ping_response_obj.keys.get('Message', 'Unknown')}"
+                            elif ping_response_obj:
+                                ping_err_msg += f" - Unexpected obj: {str(ping_response_obj)[:100]}"
+                            else:
+                                ping_err_msg += " - No response object (timeout on future.response)"
+                            logger.warning(f"Worker: AMI Ping response issue: {ping_err_msg}")
+                            # A failed ping is a strong sign the connection is dead.
+                            raise ConnectionAbortedError(f"Ping failure implies connection loss: {ping_err_msg}")
+                        
+                    except Exception as e_ping: # Includes ConnectionAbortedError from above
+                        logger.error(f"Worker: Critical error during keepalive Ping: {e_ping}", exc_info=True)
+                        # Re-raise as ConnectionAbortedError to trigger the main exception handler for the worker loop.
+                        raise ConnectionAbortedError(f"Ping processing failed, connection likely lost: {e_ping}") from e_ping
         except (ConnectionRefusedError, socket.timeout, OSError, ConnectionAbortedError) as e:
             logger.error(f"AMI Worker Thread: Connection or Critical Action Error: {e}")
             if self._main_loop:
@@ -366,7 +383,7 @@ class AsteriskAmiClient:
 
     # In call_processor_service/asterisk_ami_client.py
 
-    async def send_action(self, action: Union[str, AmiAction], timeout: float = 10.0, **kwargs) -> Optional[Dict[str, Any]]:
+    async def send_action(self, action: Union[str, AmiAction], timeout: float = 10.0, event_callback: Optional[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = None, **kwargs) -> Optional[Dict[str, Any]]:
         if not self._connected:
             logger.warning("AMI not connected. Attempting connect before send_action.")
             if not await self.connect_and_login():
@@ -376,7 +393,7 @@ class AsteriskAmiClient:
         if not self._connected:
              logger.error("send_action: Still not connected after connect attempt. Cannot send.")
              return {"Response": "Error", "Message": "AMI still not connected post-attempt"}
-
+ 
         action_obj = action if isinstance(action, AmiAction) else AmiAction(action, **kwargs)
         action_id = action_obj.get_action_id()
         
@@ -384,6 +401,10 @@ class AsteriskAmiClient:
         response_future_async = self._main_loop.create_future()
         self._response_futures[action_id] = response_future_async
         
+        if event_callback:
+            self._action_event_callbacks[action_id] = event_callback
+            logger.debug(f"Registered event callback for ActionID: {action_id}")
+
         try:
             self._action_queue.put((action_obj, response_future_async), block=False)
             logger.debug(f"Queued action {action_obj.get_name()} (ID: {action_id}) for worker thread.")
@@ -410,23 +431,24 @@ class AsteriskAmiClient:
         finally:
             # Clean up the future from our tracking dict regardless of outcome.
             self._response_futures.pop(action_id, None)
+            # Do NOT remove the action_event_callback here; it's removed upon action completion event.
 
-    def add_event_listener(self, event_name: str, callback: Callable[[Dict[str, Any]], Awaitable[None]]): # pragma: no cover
+    def add_event_listener(self, event_name: str, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]): # pragma: no cover
         if event_name not in self._event_listeners: self._event_listeners[event_name] = set()
         self._event_listeners[event_name].add(callback)
         logger.debug(f"Added listener for AMI event: {event_name}")
 
-    def remove_event_listener(self, event_name: str, callback: Callable[[Dict[str, Any]], Awaitable[None]]): # pragma: no cover
+    def remove_event_listener(self, event_name: str, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]): # pragma: no cover
         if event_name in self._event_listeners:
             self._event_listeners[event_name].discard(callback)
             if not self._event_listeners[event_name]: del self._event_listeners[event_name]
         logger.debug(f"Removed listener for AMI event: {event_name}")
 
-    def add_generic_event_listener(self, callback: Callable[[Dict[str, Any]], Awaitable[None]]):
+    def add_generic_event_listener(self, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]):
         self._generic_event_listeners.add(callback)
         logger.debug("Added generic AMI event listener.")
 
-    def remove_generic_event_listener(self, callback: Callable[[Dict[str, Any]], Awaitable[None]]): # pragma: no cover
+    def remove_generic_event_listener(self, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]): # pragma: no cover
         self._generic_event_listeners.discard(callback)
         logger.debug("Removed generic AMI event listener.")
 

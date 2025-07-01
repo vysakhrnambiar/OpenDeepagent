@@ -2,7 +2,8 @@
 import asyncio
 import json
 import base64
-import websockets
+import websockets.client
+import websockets.exceptions
 import time
 from typing import Optional, AsyncGenerator
 import sys # ADD THIS
@@ -40,7 +41,7 @@ class OpenAIRealtimeClient:
         self.loop: asyncio.AbstractEventLoop = loop
         self.model_name: str = model_name
         
-        self._websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self._websocket: Optional[websockets.client.WebSocketClientProtocol] = None
         self.is_connected: bool = False
         self.session_id_from_openai: Optional[str] = None
         
@@ -50,7 +51,8 @@ class OpenAIRealtimeClient:
         self._receive_task: Optional[asyncio.Task] = None
         self._connect_lock = asyncio.Lock()
         self._stop_event = asyncio.Event() # For graceful shutdown
-
+        self._is_terminating = False # Flag to stop sending audio when call is ending
+ 
         # Retry settings for connection
         self._max_connect_retries: int = connect_retries
         self._base_connect_retry_delay_s: float = connect_retry_delay_s
@@ -81,7 +83,7 @@ class OpenAIRealtimeClient:
                     endpoint = f"wss://api.openai.com/v1/realtime?model={self.model_name}"
                     
                     # Set longer open_timeout, default is 10s, can be too short for first connect under load
-                    self._websocket = await websockets.connect(endpoint, extra_headers=headers, open_timeout=20.0, ping_interval=20, ping_timeout=20)
+                    self._websocket = await websockets.client.connect(endpoint, extra_headers=headers, open_timeout=20.0, ping_interval=20, ping_timeout=20)
 
                     # Prepare session config
                     session_config = {
@@ -100,21 +102,25 @@ class OpenAIRealtimeClient:
                                 {
                                     "type": "function",
                                     "name": "end_call",
-                                    "description": "Terminate the call when objectives are met or cannot proceed",
+                                    "description": "Terminate the call. This function MUST be used to end all calls.",
                                     "parameters": {
                                         "type": "object",
                                         "properties": {
+                                            "final_message": {
+                                                "type": "string",
+                                                "description": "The exact, final, polite message that you are saying to the user before hanging up (e.g., 'Thank you for your time. Goodbye.'). This is used for timing the hangup."
+                                            },
                                             "reason": {
                                                 "type": "string",
-                                                "description": "Reason for ending the call"
+                                                "description": "A summary of the reason for ending the call."
                                             },
                                             "outcome": {
                                                 "type": "string",
                                                 "enum": ["success", "failure", "dnd", "user_busy"],
-                                                "description": "Call outcome type"
+                                                "description": "The final outcome of the call."
                                             }
                                         },
-                                        "required": ["reason", "outcome"]
+                                        "required": ["final_message", "reason", "outcome"]
                                     }
                                 },
                                 {
@@ -190,7 +196,7 @@ class OpenAIRealtimeClient:
                         # Fall through to retry logic
 
                 except websockets.exceptions.InvalidStatusCode as e:
-                    logger.error(f"[OpenAIClient:{id(self)}] OpenAI connection failed (HTTP Status {e.status_code}): {e.body.decode() if hasattr(e, 'body') and e.body else 'No body'}")
+                    logger.error(f"[OpenAIClient:{id(self)}] OpenAI connection failed (HTTP Status {e.status_code}): {e}")
                     if e.status_code == 401:
                         logger.critical(f"[OpenAIClient:{id(self)}] OpenAI Authentication Failed (401). Cannot proceed.")
                         return False # Fatal, no retry
@@ -217,10 +223,14 @@ class OpenAIRealtimeClient:
 
 
     async def send_audio_chunk(self, audio_bytes_24khz_pcm16: bytes):
+        if self._is_terminating:
+            logger.debug(f"[OpenAIClient:{self.session_id_from_openai}] Call is terminating, ignoring further audio chunks.")
+            return
+
         if not self.is_connected or not self._websocket or self._websocket.closed:
             logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot send audio, not connected.")
             return
-
+ 
         try:
             audio_b64 = base64.b64encode(audio_bytes_24khz_pcm16).decode('ascii')
             message = {"type": "input_audio_buffer.append", "audio": audio_b64}
@@ -477,6 +487,9 @@ class OpenAIRealtimeClient:
     async def _execute_end_call(self, arguments: dict) -> dict:
         """Execute end_call function and publish Redis command"""
         try:
+            self._is_terminating = True # Set the flag to stop sending further audio
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Terminating flag set. No more audio will be sent to OpenAI.")
+            final_message = arguments.get("final_message", "Thank you. Goodbye.")
             reason = arguments.get("reason", "AI decided to end call")
             outcome = arguments.get("outcome", "success")
             
@@ -487,7 +500,8 @@ class OpenAIRealtimeClient:
                 command = RedisEndCallCommand(
                     call_attempt_id=self.call_id,
                     reason=reason,
-                    outcome=outcome
+                    outcome=outcome,
+                    final_message=final_message # Pass the final message in the command
                 )
                 
                 # Publish Redis command to trigger CallAttemptHandler hangup
