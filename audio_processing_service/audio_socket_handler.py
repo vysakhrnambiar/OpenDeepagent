@@ -4,9 +4,12 @@ import struct
 import sys
 import uuid # For uuid.UUID()
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 import numpy as np
 import os
+
+if TYPE_CHECKING:
+    from .audio_socket_server import AudioSocketServer
 import wave # For saving WAV files
 
 # --- Path Setup ---
@@ -18,7 +21,7 @@ if str(_project_root) not in sys.path:
 from config.app_config import app_config
 from common.logger_setup import setup_logger
 from common.redis_client import RedisClient
-from common.data_models import RedisEndCallCommand
+from common.data_models import RedisEndCallCommand, RedisAIHandshakeCommand
 from database import db_manager
 from database.models import CallStatus
 
@@ -60,12 +63,14 @@ class AudioSocketHandler:
     def __init__(self,
                  reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter,
-                 redis_client: RedisClient, # Initial params for TCP version
-                 peername: tuple | str | None):
+                 redis_client: RedisClient,
+                 peername: tuple | str | None,
+                 server: 'AudioSocketServer'):
         self.reader = reader
         self.writer = writer
         self.redis_client = redis_client
         self.peername = peername if peername else "UnknownPeer"
+        self.server = server
         
         # These will be populated after reading the first TYPE_UUID frame from Asterisk
         self.call_id: Optional[int] = None
@@ -129,6 +134,9 @@ class AudioSocketHandler:
         if command_type == RedisEndCallCommand.model_fields['command_type'].default:
             logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Received EndCall command via Redis. Signaling handler to stop.")
             self._stop_event.set()
+        elif command_type == RedisAIHandshakeCommand.model_fields['command_type'].default:
+            logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Received TriggerAIResponse command via Redis.")
+            await self.trigger_ai_response()
         
     async def _listen_for_redis_commands(self):
         if self.call_id is None: # Should not happen if called correctly
@@ -322,7 +330,8 @@ class AudioSocketHandler:
                 return
 
             self.call_id = call_record.id
-            logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Successfully mapped Asterisk UUID to AppCallID. Starting main processing.")
+            self.server.register_handler(self)
+            logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id},AstDialplanUUID={self.asterisk_call_uuid}] Successfully mapped Asterisk UUID to AppCallID and registered with server. Starting main processing.")
 
             # --- Stage 3: Start background tasks and OpenAI initialization ---
             if self.call_id: # Redundant check, but safe
@@ -509,3 +518,11 @@ class AudioSocketHandler:
                      await self._update_call_status_db(CallStatus.COMPLETED_SYSTEM_HANGUP, call_conclusion="AudioSocket (TCP) disconnected or error during handling")
 
             logger.info(f"[AudioSocketHandler-TCP:AppCallID={app_id_for_log},AstDialplanUUID={uuid_for_log}] Cleanup complete for peer {self.peername}.")
+
+    async def trigger_ai_response(self):
+        """Triggers the AI to generate a response, typically to start the conversation."""
+        if self.openai_client and self._openai_ready:
+            logger.info(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Triggering AI response via OpenAI client.")
+            await self.openai_client.trigger_ai_response()
+        else:
+            logger.warning(f"[AudioSocketHandler-TCP:AppCallID={self.call_id}] Cannot trigger AI response, OpenAI client not ready.")

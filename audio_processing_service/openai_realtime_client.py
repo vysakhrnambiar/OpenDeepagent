@@ -243,6 +243,21 @@ class OpenAIRealtimeClient:
         except Exception as e:
             logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error sending audio to OpenAI: {e}", exc_info=True)
 
+    async def trigger_ai_response(self):
+        """Send a 'response.create' message to prompt the AI to speak."""
+        if not self.is_connected or not self._websocket or self._websocket.closed:
+            logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot trigger AI response, not connected.")
+            return
+
+        try:
+            response_create_payload = {"type": "response.create"}
+            await self._websocket.send(json.dumps(response_create_payload))
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Sent 'response.create' to OpenAI to trigger AI's turn.")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI connection closed while triggering response: {e}.")
+            self.is_connected = False
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error triggering AI response: {e}", exc_info=True)
 
     async def _receive_loop(self):
         logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Starting OpenAI receive loop.")

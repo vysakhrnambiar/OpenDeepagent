@@ -18,7 +18,7 @@ from database import db_manager
 from database.models import Call, CallStatus, TaskStatus, CallCreate
 from common.logger_setup import setup_logger
 from common.redis_client import RedisClient
-from common.data_models import RedisDTMFCommand, RedisEndCallCommand
+from common.data_models import RedisDTMFCommand, RedisEndCallCommand, RedisAIHandshakeCommand
 from call_processor_service.asterisk_ami_client import AsteriskAmiClient, AmiAction
 from audio_processing_service.openai_realtime_client import OpenAIRealtimeClient
 
@@ -192,12 +192,19 @@ class CallAttemptHandler:
             try:
                 cmd = RedisDTMFCommand(**command_data_dict)
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Processing DTMF command: sending '{cmd.digits}' to channel {self.asterisk_channel_name}")
-                dtmf_action = AmiAction("PlayDTMF", Channel=self.asterisk_channel_name, Digit=cmd.digits)
-                response = await self.ami_client.send_action(dtmf_action)
-                if response and response.get("Response") == "Success":
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] DTMF '{cmd.digits}' sent successfully.")
-                else:
-                    logger.error(f"[CallAttemptHandler:{self.call_id}] Failed to send DTMF '{cmd.digits}'. Response: {response}")
+                for digit in cmd.digits:
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Sending DTMF digit: '{digit}' to channel {self.asterisk_channel_name}")
+                    dtmf_action = AmiAction("PlayDTMF", Channel=self.asterisk_channel_name, Digit=digit)
+                    # Using a shorter timeout for individual digits.
+                    response = await self.ami_client.send_action(dtmf_action, timeout=3.0)
+                    if response and response.get("Response") == "Success":
+                        logger.info(f"[CallAttemptHandler:{self.call_id}] DTMF digit '{digit}' sent successfully.")
+                    else:
+                        logger.error(f"[CallAttemptHandler:{self.call_id}] Failed to send DTMF digit '{digit}'. Response: {response}")
+                        # If one digit fails, we probably should stop.
+                        break
+                    # Asterisk documentation suggests a small delay might be needed between digits for some endpoints.
+                    await asyncio.sleep(0.25) # 250ms delay
             except Exception as e:
                 logger.error(f"[CallAttemptHandler:{self.call_id}] Error processing DTMF command: {e}", exc_info=True)
         
@@ -378,17 +385,30 @@ class CallAttemptHandler:
             elif not sub_event and dial_status_from_event: # Plain 'Dial' event with DialStatus
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Event. DestChannel: {dest_channel}, DialStatus: {dial_status_from_event}")
                 if dial_status_from_event == "ANSWER":
-                     if not self.call_answer_time: self.call_answer_time = datetime.now()
-                     logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (Dial:ANSWER).")
-                     await self._update_call_status_db(CallStatus.ANSWERED)
+                    if not self.call_answer_time:
+                        self.call_answer_time = datetime.now()
+                        logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (Dial:ANSWER).")
+                        await self._update_call_status_db(CallStatus.ANSWERED)
+                        # The BridgeEnter event is now the primary trigger for the handshake.
+                        # This logic can be simplified or removed if BridgeEnter is reliable.
+                        # For now, we leave it as a fallback.
+                        if self.asterisk_call_specific_uuid:
+                            handshake_command = RedisAIHandshakeCommand(asterisk_call_uuid=self.asterisk_call_specific_uuid)
+                            channel = f"audiosocket_server_commands:{self.asterisk_call_specific_uuid}"
+                            logger.info(f"[CallAttemptHandler:{self.call_id}] Publishing AI Handshake command from Dial event.")
+                            await self.redis_client.publish_command(channel, handshake_command.model_dump())
+                        else:
+                            logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot publish AI Handshake from Dial event, asterisk_call_specific_uuid is not set.")
                 # ... (handle other dial_status_from_event like NOANSWER, BUSY etc. as below)
 
             elif sub_event == "End" or (event_name == "DialEnd"): # Handle DialEnd too
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Dial End. DestChannel: {dest_channel}, DialStatus: {dial_status_from_event}")
                 if dial_status_from_event == "ANSWER":
-                    if not self.call_answer_time: self.call_answer_time = datetime.now()
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (DialEnd:ANSWER).")
-                    await self._update_call_status_db(CallStatus.ANSWERED)
+                    if not self.call_answer_time:
+                        self.call_answer_time = datetime.now()
+                        logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (DialEnd:ANSWER).")
+                        await self._update_call_status_db(CallStatus.ANSWERED)
+                        # The BridgeEnter event is now the primary trigger for the handshake.
                 elif dial_status_from_event in ["NOANSWER", "CANCEL", "DONTCALL", "TORTURE"]:
                     await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="No effective answer", final_status=CallStatus.FAILED_NO_ANSWER)
                 elif dial_status_from_event == "BUSY":
@@ -422,11 +442,19 @@ class CallAttemptHandler:
                 final_status=final_status
             )
 
-        elif event_name == "BridgeEnter": # Or just "Bridge" with SubEvent "Enter"
+        elif event_name == "BridgeEnter":
             bridge_unique_id = event.get("BridgeUniqueid")
             logger.info(f"[CallAttemptHandler:{self.call_id}] BridgeEnter event: Channel {channel_from_event} (OurAstUID: {self.asterisk_unique_id}) entered bridge {bridge_unique_id}. Type: {event.get('BridgeType')}")
-            # If the call was just answered, and now enters a bridge, this firms up the "answered" state.
-            # Often, AudioSocket connection implies the media path is ready.
+            if not self.call_answer_time:
+                self.call_answer_time = datetime.now()
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Call considered Answered (BridgeEnter). Publishing AI Handshake command.")
+                await self._update_call_status_db(CallStatus.ANSWERED)
+                if self.asterisk_call_specific_uuid:
+                    handshake_command = RedisAIHandshakeCommand(asterisk_call_uuid=self.asterisk_call_specific_uuid)
+                    channel = f"audiosocket_server_commands:{self.asterisk_call_specific_uuid}"
+                    await self.redis_client.publish_command(channel, handshake_command.model_dump())
+                else:
+                    logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot publish AI Handshake on BridgeEnter, asterisk_call_specific_uuid is not set.")
 
         # Other events like BridgeLeave, etc., can be added as needed.
 

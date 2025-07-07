@@ -110,3 +110,7 @@ class RedisRescheduleCommand(RedisCommandBase):
     call_attempt_id: int
     reason: str
     time_description: str
+
+class RedisAIHandshakeCommand(RedisCommandBase):
+    command_type: Literal["trigger_ai_response"] = "trigger_ai_response"
+    asterisk_call_uuid: str = Field(..., description="The unique UUID for the call audio stream, used to identify the correct handler.")
