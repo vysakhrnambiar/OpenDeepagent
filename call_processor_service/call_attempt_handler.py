@@ -43,6 +43,7 @@ class CallAttemptHandler:
         
         self.asterisk_unique_id: Optional[str] = None
         self.asterisk_channel_name: Optional[str] = None
+        self.outbound_channel_name: Optional[str] = None # To store the PJSIP channel for DTMF
         self.originate_action_id: Optional[str] = None
         
         self.call_start_time: Optional[datetime] = None
@@ -175,40 +176,32 @@ class CallAttemptHandler:
         logger.debug(f"[CallAttemptHandler:{self.call_id}] Received Redis command on {channel}: {command_data_dict}")
         command_type = command_data_dict.get("command_type")
 
-        # If channel is not known yet, wait for the AMI event processor to identify it.
-        if not self.asterisk_channel_name:
-            logger.warning(f"[CallAttemptHandler:{self.call_id}] Asterisk channel not yet known for command '{command_type}'. Waiting for identification event...")
-            try:
-                await asyncio.wait_for(self._channel_identified_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.error(f"[CallAttemptHandler:{self.call_id}] Timed out waiting for channel identification. Cannot process Redis command '{command_type}'.")
-                return
-        
-        if not self.asterisk_channel_name:
-            logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot process Redis command '{command_type}', Asterisk channel could not be identified in time, even after event.")
-            return
-
         if command_type == "send_dtmf":
+            # --- NEW DTMF LOGIC ---
+            if not self.outbound_channel_name:
+                logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot send DTMF. Outbound channel has not been identified yet.")
+                return
             try:
                 cmd = RedisDTMFCommand(**command_data_dict)
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Processing DTMF command: sending '{cmd.digits}' to channel {self.asterisk_channel_name}")
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Processing DTMF command: sending '{cmd.digits}' to outbound channel {self.outbound_channel_name}")
                 for digit in cmd.digits:
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Sending DTMF digit: '{digit}' to channel {self.asterisk_channel_name}")
-                    dtmf_action = AmiAction("PlayDTMF", Channel=self.asterisk_channel_name, Digit=digit)
-                    # Using a shorter timeout for individual digits.
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Sending DTMF digit: '{digit}' to channel {self.outbound_channel_name}")
+                    dtmf_action = AmiAction("PlayDTMF", Channel=self.outbound_channel_name, Digit=digit)
                     response = await self.ami_client.send_action(dtmf_action, timeout=3.0)
                     if response and response.get("Response") == "Success":
                         logger.info(f"[CallAttemptHandler:{self.call_id}] DTMF digit '{digit}' sent successfully.")
                     else:
                         logger.error(f"[CallAttemptHandler:{self.call_id}] Failed to send DTMF digit '{digit}'. Response: {response}")
-                        # If one digit fails, we probably should stop.
                         break
-                    # Asterisk documentation suggests a small delay might be needed between digits for some endpoints.
-                    await asyncio.sleep(0.25) # 250ms delay
+                    await asyncio.sleep(0.25)
             except Exception as e:
                 logger.error(f"[CallAttemptHandler:{self.call_id}] Error processing DTMF command: {e}", exc_info=True)
-        
+
         elif command_type == "end_call":
+            # --- HANGUP LOGIC (Uses original channel) ---
+            if not self.asterisk_channel_name:
+                logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot process EndCall command, Asterisk channel could not be identified.")
+                return
             try:
                 cmd = RedisEndCallCommand(**command_data_dict)
                 
@@ -366,58 +359,32 @@ class CallAttemptHandler:
             if current_db_status not in [CallStatus.DIALING, CallStatus.RINGING, CallStatus.ANSWERED, CallStatus.LIVE_AI_HANDLING]:
                 await self._update_call_status_db(CallStatus.DIALING)
 
-        elif event_name == "Dial": # Covers DialBegin, DialState, DialEnd via SubEvent
-            sub_event = event.get("SubEvent")
-            dial_status_from_event = event.get("DialStatus") # Typically in DialEnd or just Dial if SubEvent isn't used by lib
+        elif event_name == "DialBegin":
             dest_channel = event.get("DestChannel")
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Begin to DestChannel: {dest_channel} (DestUID: {event.get('DestUniqueID')})")
+            if dest_channel:
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Captured outbound channel for DTMF: '{dest_channel}'")
+                self.outbound_channel_name = dest_channel
+            if self.call_record.status not in [CallStatus.RINGING, CallStatus.ANSWERED, CallStatus.LIVE_AI_HANDLING]:
+                await self._update_call_status_db(CallStatus.RINGING)
 
-            if sub_event == "Begin" or (event_name == "DialBegin"): # Handle DialBegin too
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Begin to DestChannel: {dest_channel} (DestUID: {event.get('DestUniqueID')})")
-                if dest_channel and self.asterisk_channel_name != dest_channel:
-                    logger.info(f"[CallAttemptHandler:{self.call_id}] Updating tracked channel for hangup/DTMF from '{self.asterisk_channel_name}' to DestChannel: '{dest_channel}'")
-                    self.asterisk_channel_name = dest_channel
-                    if self.asterisk_channel_name: self._channel_identified_event.set()
-                
-                if self.call_record.status not in [CallStatus.RINGING, CallStatus.ANSWERED, CallStatus.LIVE_AI_HANDLING]:
-                    await self._update_call_status_db(CallStatus.RINGING)
-            
-            # If 'Dial' event itself contains DialStatus (some AMI libraries might do this)
-            elif not sub_event and dial_status_from_event: # Plain 'Dial' event with DialStatus
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial Event. DestChannel: {dest_channel}, DialStatus: {dial_status_from_event}")
-                if dial_status_from_event == "ANSWER":
-                    if not self.call_answer_time:
-                        self.call_answer_time = datetime.now()
-                        logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (Dial:ANSWER).")
-                        await self._update_call_status_db(CallStatus.ANSWERED)
-                        # The BridgeEnter event is now the primary trigger for the handshake.
-                        # This logic can be simplified or removed if BridgeEnter is reliable.
-                        # For now, we leave it as a fallback.
-                        if self.asterisk_call_specific_uuid:
-                            handshake_command = RedisAIHandshakeCommand(asterisk_call_uuid=self.asterisk_call_specific_uuid)
-                            channel = f"audiosocket_server_commands:{self.asterisk_call_specific_uuid}"
-                            logger.info(f"[CallAttemptHandler:{self.call_id}] Publishing AI Handshake command from Dial event.")
-                            await self.redis_client.publish_command(channel, handshake_command.model_dump())
-                        else:
-                            logger.error(f"[CallAttemptHandler:{self.call_id}] Cannot publish AI Handshake from Dial event, asterisk_call_specific_uuid is not set.")
-                # ... (handle other dial_status_from_event like NOANSWER, BUSY etc. as below)
+        elif event_name == "DialEnd":
+            dial_status_from_event = event.get("DialStatus")
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Dial End. DestChannel: {event.get('DestChannel')}, DialStatus: {dial_status_from_event}")
+            if dial_status_from_event == "ANSWER":
+                if not self.call_answer_time:
+                    self.call_answer_time = datetime.now()
+                    logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (DialEnd:ANSWER).")
+                    await self._update_call_status_db(CallStatus.ANSWERED)
+            elif dial_status_from_event in ["NOANSWER", "CANCEL", "DONTCALL", "TORTURE"]:
+                await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="No effective answer", final_status=CallStatus.FAILED_NO_ANSWER)
+            elif dial_status_from_event == "BUSY":
+                await self._handle_call_ended(hangup_cause="DialEnd: BUSY", call_conclusion="Line busy", final_status=CallStatus.FAILED_BUSY)
+            elif dial_status_from_event == "CONGESTION":
+                await self._handle_call_ended(hangup_cause="DialEnd: CONGESTION", call_conclusion="Network congestion", final_status=CallStatus.FAILED_CONGESTION)
+            elif dial_status_from_event in ["CHANUNAVAIL", "INVALIDARGS"]:
+                await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="Channel/config issue", final_status=CallStatus.FAILED_CHANNEL_UNAVAILABLE)
 
-            elif sub_event == "End" or (event_name == "DialEnd"): # Handle DialEnd too
-                logger.info(f"[CallAttemptHandler:{self.call_id}] Dial End. DestChannel: {dest_channel}, DialStatus: {dial_status_from_event}")
-                if dial_status_from_event == "ANSWER":
-                    if not self.call_answer_time:
-                        self.call_answer_time = datetime.now()
-                        logger.info(f"[CallAttemptHandler:{self.call_id}] Call Answered (DialEnd:ANSWER).")
-                        await self._update_call_status_db(CallStatus.ANSWERED)
-                        # The BridgeEnter event is now the primary trigger for the handshake.
-                elif dial_status_from_event in ["NOANSWER", "CANCEL", "DONTCALL", "TORTURE"]:
-                    await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="No effective answer", final_status=CallStatus.FAILED_NO_ANSWER)
-                elif dial_status_from_event == "BUSY":
-                    await self._handle_call_ended(hangup_cause="DialEnd: BUSY", call_conclusion="Line busy", final_status=CallStatus.FAILED_BUSY)
-                elif dial_status_from_event == "CONGESTION":
-                    await self._handle_call_ended(hangup_cause="DialEnd: CONGESTION", call_conclusion="Network congestion", final_status=CallStatus.FAILED_CONGESTION)
-                elif dial_status_from_event in ["CHANUNAVAIL", "INVALIDARGS"]:
-                    await self._handle_call_ended(hangup_cause=f"DialEnd: {dial_status_from_event}", call_conclusion="Channel/config issue", final_status=CallStatus.FAILED_CHANNEL_UNAVAILABLE)
-        
         elif event_name == "Hangup":
             if self.call_end_time: # Already handled
                 return
@@ -425,7 +392,7 @@ class CallAttemptHandler:
             hangup_cause_txt = event.get("Cause-txt", f"Unknown (Code: {hangup_cause_code})")
             logger.info(f"[CallAttemptHandler:{self.call_id}] Hangup event for UniqueID {unique_id_from_event}. Cause: {hangup_cause_txt} (Code: {hangup_cause_code})")
             
-            final_status = CallStatus.COMPLETED_SYSTEM_HANGUP 
+            final_status = CallStatus.COMPLETED_SYSTEM_HANGUP
             if hangup_cause_code == "16": # Normal Clearing
                 call_db_record = await self._loop.run_in_executor(None, db_manager.get_call_by_id, self.call_id)
                 if call_db_record:
@@ -445,6 +412,15 @@ class CallAttemptHandler:
         elif event_name == "BridgeEnter":
             bridge_unique_id = event.get("BridgeUniqueid")
             logger.info(f"[CallAttemptHandler:{self.call_id}] BridgeEnter event: Channel {channel_from_event} (OurAstUID: {self.asterisk_unique_id}) entered bridge {bridge_unique_id}. Type: {event.get('BridgeType')}")
+            
+            # --- NEW LOGIC TO CAPTURE OUTBOUND CHANNEL ---
+            # The is_relevant check has already confirmed this event is linked to our call.
+            # If the channel in the event is not our initial channel, it MUST be the outbound one.
+            if channel_from_event and self.asterisk_channel_name and channel_from_event != self.asterisk_channel_name:
+                logger.info(f"[CallAttemptHandler:{self.call_id}] BridgeEnter event from a different channel: '{channel_from_event}'. Capturing as outbound channel for DTMF.")
+                self.outbound_channel_name = channel_from_event
+            # --- END NEW LOGIC ---
+
             if not self.call_answer_time:
                 self.call_answer_time = datetime.now()
                 logger.info(f"[CallAttemptHandler:{self.call_id}] Call considered Answered (BridgeEnter). Publishing AI Handshake command.")
@@ -517,22 +493,22 @@ class CallAttemptHandler:
         self._loop = asyncio.get_running_loop()
         logger.info(f"[CallAttemptHandler:{self.call_id}] Starting to manage call lifecycle.")
 
-        # <<< START: MODIFIED LOGIC >>>
-        # 1. Start listening for Redis commands.
-        self._redis_listener_task = asyncio.create_task(self._listen_for_redis_commands())
-        
-        # 2. NOW, originate the call. The event listener is passed directly.
-        origination_success = await self._originate_call()
-        if not origination_success:
-            logger.error(f"[CallAttemptHandler:{self.call_id}] Origination failed. Aborting lifecycle management.")
-            # The failure is already handled inside _originate_call, but we must unregister the handler here.
-            if self.unregister_callback:
-                await self.unregister_callback(self.call_id)
-            # The 'finally' block will handle cleanup.
-            return
-        # <<< END: MODIFIED LOGIC >>>
+        # --- NEW: Register a generic event listener for this handler ---
+        self.ami_client.add_generic_event_listener(self._process_ami_event)
+        logger.info(f"[CallAttemptHandler:{self.call_id}] Registered generic AMI event listener.")
 
         try:
+            # 1. Start listening for Redis commands.
+            self._redis_listener_task = asyncio.create_task(self._listen_for_redis_commands())
+            
+            # 2. Originate the call. The action-specific callback remains for rapid OriginateResponse handling.
+            origination_success = await self._originate_call()
+            if not origination_success:
+                logger.error(f"[CallAttemptHandler:{self.call_id}] Origination failed. Aborting lifecycle management.")
+                if self.unregister_callback:
+                    await self.unregister_callback(self.call_id)
+                return
+
             # 3. Wait for the call to end (via stop_event set by an event handler).
             await self._stop_event.wait()
             logger.info(f"[CallAttemptHandler:{self.call_id}] Stop event received. Proceeding to cleanup.")
@@ -555,9 +531,10 @@ class CallAttemptHandler:
         finally:
             logger.info(f"[CallAttemptHandler:{self.call_id}] Starting final cleanup for lifecycle.")
             
-            # The primary hangup logic is now reliable. The emergency hangup in the finally block
-            # is causing a race condition where a second hangup is sent before the first one's
-            # event is processed. It is now safe to remove.
+            # --- NEW: Unregister the generic event listener ---
+            self.ami_client.remove_generic_event_listener(self._process_ami_event)
+            logger.info(f"[CallAttemptHandler:{self.call_id}] Unregistered generic AMI event listener.")
+
             logger.info(f"[CallAttemptHandler:{self.call_id}] Final cleanup initiated.")
             
             if self._redis_listener_task and not self._redis_listener_task.done():
@@ -567,9 +544,6 @@ class CallAttemptHandler:
                 except asyncio.CancelledError: logger.info(f"[CallAttemptHandler:{self.call_id}] Redis listener task successfully cancelled during cleanup.")
                 except Exception as e_redis_cancel: logger.error(f"[CallAttemptHandler:{self.call_id}] Error awaiting cancelled Redis listener: {e_redis_cancel}")
             
-            # No need to remove a generic listener anymore. Action-specific listeners are cleaned up automatically.
-            logger.info(f"[CallAttemptHandler:{self.call_id}] Cleanup: No generic AMI listener to remove.")
-
             # This check is important. If the call never properly ended (e.g. error before _handle_call_ended was called),
             # we need to make sure it's unregistered.
             if not self.call_end_time:
