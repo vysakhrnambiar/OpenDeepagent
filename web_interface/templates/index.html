@@ -16,8 +16,55 @@
                 <button id="edit-username-btn" class="edit-username-button">Set Name</button>
             </div>
             <h1>AI Planning Assistant</h1>
-            <button id="toggle-theme-btn">Toggle Theme</button>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <a href="/ui/dashboard" style="color: #007bff; text-decoration: none; font-weight: 500;">Task Dashboard</a>
+                <button id="toggle-theme-btn">Toggle Theme</button>
+            </div>
         </header>
+
+        <!-- Test Scenarios Panel (only visible for APPU user) -->
+        <div id="test-scenarios-panel" class="test-scenarios-panel hidden">
+            <h3>🧪 Quick Test Scenarios</h3>
+            <p class="test-instruction">Click any scenario to instantly create and schedule a test campaign:</p>
+            
+            <div class="scenarios-grid">
+                <div class="scenario-category">
+                    <h4>📞 HITL Scenarios (Human Intervention Required)</h4>
+                    <div class="scenario-buttons">
+                        <button class="scenario-btn hitl-scenario" data-scenario="hotel-booking">
+                            🏨 Hotel Booking
+                            <small>Time conflict requires human decision</small>
+                        </button>
+                        <button class="scenario-btn hitl-scenario" data-scenario="restaurant-reservation">
+                            🍽️ Restaurant Reservation
+                            <small>Menu changes need confirmation</small>
+                        </button>
+                        <button class="scenario-btn hitl-scenario" data-scenario="appointment-scheduling">
+                            📅 Doctor Appointment
+                            <small>Availability conflict needs resolution</small>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="scenario-category">
+                    <h4>🤖 Auto Scenarios (No Human Intervention)</h4>
+                    <div class="scenario-buttons">
+                        <button class="scenario-btn auto-scenario" data-scenario="confirmation-call">
+                            ✅ Confirmation Call
+                            <small>Simple appointment confirmation</small>
+                        </button>
+                        <button class="scenario-btn auto-scenario" data-scenario="follow-up-call">
+                            📞 Follow-up Call
+                            <small>Service satisfaction check</small>
+                        </button>
+                        <button class="scenario-btn auto-scenario" data-scenario="survey-call">
+                            📊 Survey Call
+                            <small>Quick customer feedback</small>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div id="chat-container">
             <div id="chat-window">
@@ -25,6 +72,7 @@
             </div>
             <form id="message-form">
                 <input type="text" id="message-input" placeholder="Describe your calling task..." autocomplete="off">
+                <button type="button" id="mic-btn">🎤</button>
                 <button type="submit">Send</button>
             </form>
             <button id="confirm-campaign-btn" class="hidden">Confirm and Schedule Campaign</button>

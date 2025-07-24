@@ -18,9 +18,11 @@ from database import db_manager
 from database.models import Call, CallStatus, TaskStatus, CallCreate
 from common.logger_setup import setup_logger
 from common.redis_client import RedisClient
-from common.data_models import RedisDTMFCommand, RedisEndCallCommand, RedisAIHandshakeCommand
+from common.data_models import (
+    RedisDTMFCommand, RedisEndCallCommand, RedisAIHandshakeCommand,
+    RedisRequestUserInfoCommand, RedisHITLResponseCommand, RedisHITLTimeoutCommand
+)
 from call_processor_service.asterisk_ami_client import AsteriskAmiClient, AmiAction
-from audio_processing_service.openai_realtime_client import OpenAIRealtimeClient
 
 logger = setup_logger(__name__, level_str=app_config.LOG_LEVEL)
 
@@ -51,8 +53,6 @@ class CallAttemptHandler:
         self.call_end_time: Optional[datetime] = None
 
         self.asterisk_call_specific_uuid: Optional[str] = None # Will hold the UUID for AudioSocket path
-        self.openai_client: Optional[OpenAIRealtimeClient] = None # Store OpenAI client instance
-        self.openai_session_id: Optional[str] = None # Store OpenAI session ID
 
         self._stop_event = asyncio.Event()
         self._redis_listener_task: Optional[asyncio.Task] = None
@@ -132,18 +132,12 @@ class CallAttemptHandler:
         #dial_string_for_local_channel = f"{app_config.DEFAULT_ASTERISK_CHANNEL_TYPE}/{target_phone_number}" # e.g. PJSIP/7000
         originate_action = AmiAction(
             "Originate",
-            # We are NOT using a Local channel here for the initial Originate command.
-            # We are telling Asterisk to create a channel and immediately
-            # send it to our dialplan context.
-            #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
-           # Channel=f"Local/s@opendeep-holding-context", # <-- NEW LINE
-            #Channel=f"Local/s@{app_config.DEFAULT_ASTERISK_CONTEXT}",
-            #Channel=f"Local/s@opendeep-ai-leg",
-            Channel=f"Local/s@test-audiosocket-playback-first",
-            #Context="opendeep-audiosocket-outbound", # The context where our logic lives
-            Context="opendeep-human-leg",  
-            Exten="s",                               # The 'start' extension
-            Priority=1,                              # The first step
+            # Use test context that establishes AudioSocket first
+            Channel=f"Local/s@opendeep-ai-leg",
+            #Channel=f"Local/s@test-audiosocket-playback-first",
+            Context="opendeep-human-leg",  # The context that handles dialing to the target
+            Exten="s",                     # The 'start' extension
+            Priority=1,                    # The first step
             CallerID=f"OpenDeep <{app_config.DEFAULT_CALLER_ID_EXTEN}>",
             Timeout=30000,
             Async="true",
@@ -228,6 +222,19 @@ class CallAttemptHandler:
                     logger.error(f"[CallAttemptHandler:{self.call_id}] Failed to send Hangup command. Response: {response}")
             except Exception as e:
                 logger.error(f"[CallAttemptHandler:{self.call_id}] Error processing EndCall command: {e}", exc_info=True)
+        
+        elif command_type == "request_user_info":
+            # --- HITL (Human-in-the-Loop) REQUEST LOGIC ---
+            # CallAttemptHandler now only logs and forwards to OrchestratorService via existing Redis publish
+            # OrchestratorService handles all timeout logic and will inject responses directly to AI
+            try:
+                cmd = RedisRequestUserInfoCommand(**command_data_dict)
+                logger.info(f"[CallAttemptHandler:{self.call_id}] Received request_user_info command: '{cmd.question}' (timeout: {cmd.timeout_seconds}s)")
+                logger.info(f"[CallAttemptHandler:{self.call_id}] OrchestratorService will handle HITL timeout and response injection")
+                # No action needed here - OrchestratorService is already listening and will handle everything
+            except Exception as e:
+                logger.error(f"[CallAttemptHandler:{self.call_id}] Error logging request_user_info command: {e}", exc_info=True)
+        
         else:
             logger.warning(f"[CallAttemptHandler:{self.call_id}] Unknown Redis command type: {command_type}")
 
@@ -486,6 +493,7 @@ class CallAttemptHandler:
             sync_kwargs['asterisk_channel'],
             sync_kwargs['call_uuid']
         )
+
 
     # In call_processor_service/call_attempt_handler.py
 

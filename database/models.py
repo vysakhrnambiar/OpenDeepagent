@@ -1,6 +1,7 @@
 # database/models.py
-from pydantic import BaseModel, Field, constr
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+from pydantic.types import constr
+from typing import Optional, List, Dict, Any, Annotated
 from datetime import datetime
 from enum import Enum # Import Enum
 
@@ -14,6 +15,7 @@ class TaskStatus(str, Enum):
     RETRY_SCHEDULED = "retry_scheduled"     # PostCallAnalyzer determined a retry is needed and set next_action_time
     # IN_PROGRESS might be a status for the Task if a call attempt is active, or we might rely on CallStatus for that
     PENDING_ANALYSIS = "pending_analysis"   # Call attempt ended, awaiting PostCallAnalyzer
+    PENDING_USER_INFO = "pending_user_info" # AI requested information from task creator, awaiting response
     COMPLETED_SUCCESS = "completed_success" # Task objective fully met
     COMPLETED_FAILURE = "completed_failure" # Task objective could not be met after all attempts or due to conclusive failure
     ON_HOLD = "on_hold"                     # Task manually or system-paused
@@ -81,7 +83,7 @@ class TaskBase(BaseModel):
     user_id: int # Added for easier querying and ensuring data belongs to the user
     user_task_description: str
     generated_agent_prompt: str
-    phone_number: constr(strip_whitespace=True, min_length=7, max_length=20)
+    phone_number: Annotated[str, Field(min_length=7, max_length=20)]
     initial_schedule_time: datetime
     business_name: Optional[str] = None
     person_name: Optional[str] = None
@@ -90,6 +92,11 @@ class TaskBase(BaseModel):
     next_action_time: Optional[datetime] = None
     max_attempts: int = Field(3, gt=0)
     current_attempt_count: int = Field(0, ge=0)
+    # HITL (Human-in-the-Loop) support fields
+    user_info_request: Optional[str] = None          # The question asked to the task creator
+    user_info_response: Optional[str] = None         # The response from the task creator
+    user_info_timeout: int = Field(10, gt=0)         # Timeout in seconds for user response
+    user_info_requested_at: Optional[datetime] = None # When the request was made
     # inter_call_context: Optional[str] = None # For TaskLifecycleManager later
 
 class TaskCreate(BaseModel): # Separate create model if defaults differ or some fields aren't set on creation
@@ -97,7 +104,7 @@ class TaskCreate(BaseModel): # Separate create model if defaults differ or some 
     user_id: int
     user_task_description: str
     generated_agent_prompt: str
-    phone_number: constr(strip_whitespace=True, min_length=7, max_length=20)
+    phone_number: Annotated[str, Field(min_length=7, max_length=20)]
     initial_schedule_time: datetime
     business_name: Optional[str] = None
     person_name: Optional[str] = None
@@ -105,11 +112,30 @@ class TaskCreate(BaseModel): # Separate create model if defaults differ or some 
     next_action_time: Optional[datetime] = None # Often same as initial_schedule_time at creation
     max_attempts: int = Field(app_config.DEFAULT_MAX_TASK_ATTEMPTS, gt=0) # Use app_config default
     # current_attempt_count is 0 by default in DB
+    # HITL fields are optional for task creation (will be set later during calls)
+    user_info_timeout: int = Field(10, gt=0)         # Timeout in seconds for user response
 
 class Task(TaskBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    class Config:
+        from_attributes = True
+
+
+# --- Task Event Models ---
+class TaskEventBase(BaseModel):
+    task_id: int
+    event_type: str = Field(..., description="Type of event (e.g., 'status_changed', 'retry_scheduled', 'user_info_requested')")
+    event_details: Optional[str] = Field(None, description="JSON string with event-specific data")
+    created_by: str = Field("system", description="Who/what created this event")
+
+class TaskEventCreate(TaskEventBase):
+    pass
+
+class TaskEvent(TaskEventBase):
+    id: int
+    created_at: datetime
     class Config:
         from_attributes = True
 
@@ -142,7 +168,7 @@ class Call(CallBase):
 
 class CallTranscriptBase(BaseModel):
     call_id: int
-    speaker: constr(strip_whitespace=True, pattern=r"^(user|agent|system)$") # Keep as string for simplicity
+    speaker: Annotated[str, Field(pattern=r"^(user|agent|system)$")] # Keep as string for simplicity
     message: str
 
 class CallTranscriptCreate(CallTranscriptBase):
@@ -170,7 +196,7 @@ class CallEvent(CallEventBase):
 
 class DNDEntryBase(BaseModel):
     user_id: int # DND lists are per-user
-    phone_number: constr(strip_whitespace=True, min_length=7, max_length=20)
+    phone_number: Annotated[str, Field(min_length=7, max_length=20)]
     reason: Optional[str] = None
     # task_id: Optional[int] = None # Link to task that triggered DND if applicable
 

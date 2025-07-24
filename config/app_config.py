@@ -18,7 +18,7 @@ class AppConfig:
     # OpenAI API Configuration
     OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
     OPENAI_FORM_LLM_MODEL: str = os.getenv("OPENAI_FORM_LLM_MODEL", "gpt-4o") # For prompt generation, analysis
-    OPENAI_REALTIME_LLM_MODEL: str = os.getenv("OPENAI_REALTIME_LLM_MODEL", "gpt-4o-realtime-preview-2024-10-01") # For live calls
+    OPENAI_REALTIME_LLM_MODEL: str = os.getenv("OPENAI_REALTIME_LLM_MODEL", "gpt-4o-realtime-preview-2025-06-03") # For live calls
     GOOGLE_API_KEY: str | None = os.getenv("GOOGLE_API_KEY")
 
     # Asterisk AMI Configuration

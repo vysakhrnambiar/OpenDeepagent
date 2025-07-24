@@ -111,6 +111,36 @@ class RedisRescheduleCommand(RedisCommandBase):
     reason: str
     time_description: str
 
+class RedisRequestUserInfoCommand(RedisCommandBase):
+    command_type: Literal["request_user_info"] = "request_user_info"
+    call_attempt_id: int
+    question: str = Field(..., description="The question to ask the task creator")
+    timeout_seconds: int = Field(10, ge=5, le=30, description="Timeout in seconds for task creator response")
+    recipient_message: str = Field(..., description="Message to tell the call recipient while waiting")
+
+class RedisInjectSystemMessageCommand(RedisCommandBase):
+    command_type: Literal["inject_system_message"] = "inject_system_message"
+    call_attempt_id: int
+    system_message: str = Field(..., description="The system message to inject into the live conversation")
+    trigger_response: bool = Field(True, description="Whether to trigger AI response after injection")
+
+class RedisHITLResponseCommand(RedisCommandBase):
+    """
+    Command sent from CallAttemptHandler to OpenAIRealtimeClient when a user
+    provides a response to a request_user_info query.
+    """
+    command_type: Literal["hitl_response_provided"] = "hitl_response_provided"
+    call_attempt_id: int
+    response: str = Field(..., description="The response provided by the human operator.")
+
+class RedisHITLTimeoutCommand(RedisCommandBase):
+    """
+    Command sent from CallAttemptHandler to OpenAIRealtimeClient when a
+    request_user_info query times out.
+    """
+    command_type: Literal["hitl_request_timed_out"] = "hitl_request_timed_out"
+    call_attempt_id: int
+    question: str = Field(..., description="The original question that was asked to the operator, for context.")
 class RedisAIHandshakeCommand(RedisCommandBase):
     command_type: Literal["trigger_ai_response"] = "trigger_ai_response"
     asterisk_call_uuid: str = Field(..., description="The unique UUID for the call audio stream, used to identify the correct handler.")

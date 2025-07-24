@@ -5,6 +5,8 @@ from typing import List, Optional, Dict, Any, Tuple # Tuple was missing, added i
 import sys
 from pathlib import Path
 import uuid # For generating unique batch IDs
+from enum import Enum # Import Enum for type checking
+import shutil # For creating database backups
 
 # Add the project root to the Python path
 project_root = Path(__file__).resolve().parent.parent
@@ -15,7 +17,7 @@ from common.logger_setup import setup_logger # Import logger_setup
 from database.models import (
     Task, TaskCreate, Call, CallCreate, CallTranscript, CallTranscriptCreate,
     CallEvent, CallEventCreate, DNDEntry, DNDEntryCreate, User, UserCreate,
-    Campaign, CampaignCreate, TaskStatus, CallStatus # Added Enums
+    Campaign, CampaignCreate, TaskStatus, CallStatus, TaskEvent, TaskEventCreate # Added TaskEvent models
 )
 
 logger = setup_logger(__name__, level_str=app_config.LOG_LEVEL) # Initialize logger for this module
@@ -119,9 +121,7 @@ def create_batch_of_tasks(campaign: Campaign, tasks_data: List[TaskCreate]) -> b
             # TaskCreate doesn't have a status field by default; it defaults in TaskBase or DB.
             # If TaskCreate needs to override status, it should have a status field.
             # For now, assuming status is defaulted by TaskBase/DB or is appropriately set in task_data.
-            status_val = TaskStatus.PENDING.value # Default if not in task_data or handled by model default
-            if hasattr(task_data, 'status') and task_data.status:
-                 status_val = task_data.status.value if isinstance(task_data.status, Enum) else task_data.status
+            status_val = TaskStatus.PENDING.value # Default for task creation
 
 
             tasks_to_insert.append((
@@ -136,14 +136,20 @@ def create_batch_of_tasks(campaign: Campaign, tasks_data: List[TaskCreate]) -> b
                 status_val, # Use .value if it's an Enum, else direct string
                 task_data.next_action_time,
                 task_data.max_attempts,
-                0 # current_attempt_count is 0 on creation
+                0, # current_attempt_count is 0 on creation
+                # HITL fields
+                None,  # user_info_request
+                None,  # user_info_response
+                task_data.user_info_timeout,  # user_info_timeout
+                None   # user_info_requested_at
             ))
 
         cursor.executemany("""
             INSERT INTO tasks (campaign_id, user_id, user_task_description, generated_agent_prompt,
                                phone_number, initial_schedule_time, business_name, person_name,
-                               status, next_action_time, max_attempts, current_attempt_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               status, next_action_time, max_attempts, current_attempt_count,
+                               user_info_request, user_info_response, user_info_timeout, user_info_requested_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, tasks_to_insert)
         conn.commit()
         return True
@@ -160,19 +166,19 @@ def create_task(task_data: TaskCreate) -> Optional[int]:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        status_val = TaskStatus.PENDING.value # Default
-        if hasattr(task_data, 'status') and task_data.status:
-            status_val = task_data.status.value if isinstance(task_data.status, Enum) else task_data.status
+        status_val = TaskStatus.PENDING.value # Default for task creation
 
         cursor.execute("""
             INSERT INTO tasks (campaign_id, user_id, user_task_description, generated_agent_prompt,
                                phone_number, initial_schedule_time, business_name, person_name,
-                               status, next_action_time, max_attempts, current_attempt_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               status, next_action_time, max_attempts, current_attempt_count,
+                               user_info_request, user_info_response, user_info_timeout, user_info_requested_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (task_data.campaign_id, task_data.user_id, task_data.user_task_description,
               task_data.generated_agent_prompt, task_data.phone_number, task_data.initial_schedule_time,
               task_data.business_name, task_data.person_name, status_val,
-              task_data.next_action_time, task_data.max_attempts, 0))
+              task_data.next_action_time, task_data.max_attempts, 0,
+              None, None, task_data.user_info_timeout, None))  # HITL fields
         conn.commit()
         task_id = cursor.lastrowid
         if task_id is None:
@@ -240,7 +246,111 @@ def update_task_status(task_id: int, status: TaskStatus, # Changed to TaskStatus
     finally:
         conn.close()
 
+def update_task_hitl_info(task_id: int,
+                          user_info_request: Optional[str] = None,
+                          user_info_response: Optional[str] = None,
+                          user_info_requested_at: Optional[datetime] = None,
+                          status: Optional[TaskStatus] = None) -> bool:
+    """Updates HITL (Human-in-the-Loop) information for a specific task."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        fields_to_update = []
+        params: List[Any] = []
+
+        if user_info_request is not None:
+            fields_to_update.append("user_info_request = ?")
+            params.append(user_info_request)
+        if user_info_response is not None:
+            fields_to_update.append("user_info_response = ?")
+            params.append(user_info_response)
+        if user_info_requested_at is not None:
+            fields_to_update.append("user_info_requested_at = ?")
+            params.append(user_info_requested_at)
+        if status is not None:
+            fields_to_update.append("status = ?")
+            params.append(status.value)
+
+        if not fields_to_update:
+            logger.warning(f"No fields to update for HITL info on task {task_id}")
+            return False
+
+        params.append(task_id)
+        query = f"UPDATE tasks SET {', '.join(fields_to_update)} WHERE id = ?"
+        cursor.execute(query, tuple(params))
+        conn.commit()
+        
+        updated_rows = cursor.rowcount
+        if updated_rows > 0:
+            logger.debug(f"Successfully updated HITL info for task ID {task_id}")
+            return True
+        else:
+            logger.warning(f"No rows updated for HITL info on task ID {task_id}")
+            return False
+    except sqlite3.Error as e:
+        logger.error(f"Database error in update_task_hitl_info for task ID {task_id}: {e}", exc_info=True)
+        return False
+    finally:
+        conn.close()
+
 # Modified get_due_tasks to use TaskStatus Enum for filtering
+def update_task_for_hitl_request(task_id: int, question: str, timeout_seconds: int) -> bool:
+    """Update task status to pending_user_info and store HITL request details."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tasks
+            SET status = ?,
+                user_info_request = ?,
+                user_info_timeout = ?,
+                user_info_requested_at = CURRENT_TIMESTAMP,
+                user_info_response = NULL
+            WHERE id = ?
+        """, (TaskStatus.PENDING_USER_INFO.value, question, timeout_seconds, task_id))
+        
+        conn.commit()
+        updated_rows = cursor.rowcount
+        if updated_rows > 0:
+            logger.info(f"Successfully updated task {task_id} for HITL request")
+            return True
+        else:
+            logger.warning(f"No rows updated for HITL request on task {task_id}")
+            return False
+    except sqlite3.Error as e:
+        logger.error(f"Database error in update_task_for_hitl_request for task {task_id}: {e}", exc_info=True)
+        return False
+    finally:
+        conn.close()
+
+def clear_task_hitl_fields(task_id: int) -> bool:
+    """Clear HITL fields and update task status back to active."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tasks
+            SET status = ?,
+                user_info_request = NULL,
+                user_info_response = NULL,
+                user_info_requested_at = NULL
+            WHERE id = ?
+        """, (TaskStatus.QUEUED_FOR_CALL.value, task_id))
+        
+        conn.commit()
+        updated_rows = cursor.rowcount
+        if updated_rows > 0:
+            logger.info(f"Successfully cleared HITL fields for task {task_id}")
+            return True
+        else:
+            logger.warning(f"No rows updated when clearing HITL fields for task {task_id}")
+            return False
+    except sqlite3.Error as e:
+        logger.error(f"Database error in clear_task_hitl_fields for task {task_id}: {e}", exc_info=True)
+        return False
+    finally:
+        conn.close()
+
 def get_due_tasks(user_id: Optional[int] = None, max_tasks: int = 10) -> List[Task]:
     """
     Fetches tasks that are due for processing.
@@ -252,14 +362,15 @@ def get_due_tasks(user_id: Optional[int] = None, max_tasks: int = 10) -> List[Ta
         cursor = conn.cursor()
         base_query = """
             SELECT * FROM tasks
-            WHERE (status = ? OR status = ? OR status = ?)
+            WHERE (status = ? OR status = ? OR status = ? OR status = ?)
               -- AND (next_action_time IS NULL OR next_action_time <= CURRENT_TIMESTAMP) -- Temporarily commented out for testing SQL fetch
               AND current_attempt_count < max_attempts
         """
         params: List[Any] = [
             TaskStatus.PENDING.value,
             TaskStatus.ON_HOLD.value,
-            TaskStatus.RETRY_SCHEDULED.value
+            TaskStatus.RETRY_SCHEDULED.value,
+            TaskStatus.PENDING_USER_INFO.value  # Include PENDING_USER_INFO in due tasks
         ]
 
         if user_id is not None: # This part is correct and should remain
@@ -544,7 +655,8 @@ if __name__ == "__main__": # pragma: no cover
         phone_number="+15551234567",
         initial_schedule_time=datetime.now(),
         next_action_time=datetime.now(),
-        max_attempts=2 # Override default for testing
+        max_attempts=2, # Override default for testing
+        user_info_timeout=10  # Add required HITL field
     )
     task_id = create_task(task_c_data)
     if not task_id:
@@ -569,18 +681,18 @@ if __name__ == "__main__": # pragma: no cover
                     prompt_used=retrieved_task.generated_agent_prompt
                 )
                 logger.info(f"Attempting to create call for task {retrieved_task.id}")
-                created_call = await create_call_attempt(call_create_obj)
+                created_call = create_call_attempt(call_create_obj)  # Remove await - function is sync
                 if created_call and created_call.id:
-                    logger.info(f"SUCCESS: Async create_call_attempt created call ID: {created_call.id} with status {created_call.status.value}")
+                    logger.info(f"SUCCESS: create_call_attempt created call ID: {created_call.id} with status {created_call.status.value}")
 
                     # Test update_call_status
                     logger.info(f"Attempting to update call {created_call.id} to DIALING")
-                    update_success = await update_call_status(
+                    update_success = update_call_status(  # Remove await - function is sync
                         call_id=created_call.id,
                         status=CallStatus.DIALING,
                         asterisk_channel="PJSIP/test-00000001"
                     )
-                    logger.info(f"SUCCESS: Async update_call_status for call ID {created_call.id}: {update_success}")
+                    logger.info(f"SUCCESS: update_call_status for call ID {created_call.id}: {update_success}")
                     
                     # Verify update
                     updated_call_record = get_calls_for_task(retrieved_task.id) # get_calls is sync
@@ -590,7 +702,7 @@ if __name__ == "__main__": # pragma: no cover
                          logger.error(f"FAILED VERIFICATION: Call {created_call.id} status did not update as expected.")
 
                 else:
-                    logger.error("FAILED: Async create_call_attempt did not return a valid call object.")
+                    logger.error("FAILED: create_call_attempt did not return a valid call object.")
             
             # Test DND
             dnd_entry_data = DNDEntryCreate(user_id=test_user.id, phone_number="+15559876543", reason="Test DND")
@@ -637,5 +749,122 @@ def get_active_calls_count() -> int:
     finally:
         conn.close()
 
-# Add this function to database/db_manager.py
+# --- Task Event Operations ---
+def create_task_event(event_data: TaskEventCreate) -> Optional[TaskEvent]:
+    """Creates a task event record in the database."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO task_events (task_id, event_type, event_details, created_by)
+            VALUES (?, ?, ?, ?)
+        """, (event_data.task_id, event_data.event_type, event_data.event_details, event_data.created_by))
+        conn.commit()
+        event_id = cursor.lastrowid
+        if event_id:
+            cursor.execute("SELECT * FROM task_events WHERE id = ?", (event_id,))
+            row = cursor.fetchone()
+            return TaskEvent(**dict(row)) if row else None
+        return None
+    except sqlite3.Error as e:
+        logger.error(f"Database error creating task event for task {event_data.task_id}: {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+def get_task_events(task_id: int, limit: int = 100) -> List[TaskEvent]:
+    """Retrieves task events for a specific task."""
+    conn = get_db_connection()
+    events = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM task_events
+            WHERE task_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (task_id, limit))
+        for row in cursor.fetchall():
+            events.append(TaskEvent(**dict(row)))
+    except sqlite3.Error as e:
+        logger.error(f"Database error fetching task events for task {task_id}: {e}", exc_info=True)
+    finally:
+        conn.close()
+    return events
+
+def get_recent_task_events(limit: int = 50) -> List[TaskEvent]:
+    """Retrieves recent task events across all tasks."""
+    conn = get_db_connection()
+    events = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM task_events
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        for row in cursor.fetchall():
+            events.append(TaskEvent(**dict(row)))
+    except sqlite3.Error as e:
+        logger.error(f"Database error fetching recent task events: {e}", exc_info=True)
+    finally:
+        conn.close()
+    return events
+def create_database_backup() -> str:
+    """Create a timestamped backup of the database"""
+    try:
+        db_file = DATABASE_FILE
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"{db_file}.backup_before_clear.{timestamp}"
+        
+        shutil.copy2(db_file, backup_file)
+        logger.info(f"Database backup created: {backup_file}")
+        return backup_file
+    except Exception as e:
+        logger.error(f"Failed to create backup: {e}")
+        raise
+
+def clear_all_database_tables() -> int:
+    """Clear all data from all tables while preserving structure"""
+    conn = get_db_connection()
+    tables_cleared = 0
+    try:
+        cursor = conn.cursor()
+        
+        # Disable foreign key constraints temporarily
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        
+        # List of tables to clear in proper order (respecting dependencies)
+        tables_to_clear = [
+            'call_transcripts',
+            'call_events',
+            'task_events',
+            'calls',
+            'tasks',
+            'campaigns',
+            'dnd_list',
+            'users'
+        ]
+        
+        for table in tables_to_clear:
+            cursor.execute(f"DELETE FROM {table}")
+            tables_cleared += 1
+            logger.info(f"Cleared table: {table}")
+        
+        # Reset auto-increment counters
+        cursor.execute("DELETE FROM sqlite_sequence")
+        
+        # Re-enable foreign key constraints
+        cursor.execute("PRAGMA foreign_keys = ON")
+        
+        conn.commit()
+        logger.info(f"Database cleared successfully. {tables_cleared} tables emptied.")
+        return tables_cleared
+        
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error clearing database: {e}", exc_info=True)
+        raise
+    finally:
+        conn.close()
 

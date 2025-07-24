@@ -45,6 +45,10 @@ class OpenAIRealtimeClient:
         self.is_connected: bool = False
         self.session_id_from_openai: Optional[str] = None
         
+        # Redis subscription tasks
+        self._injection_listener_task: Optional[asyncio.Task] = None
+        self._hitl_events_listener_task: Optional[asyncio.Task] = None
+        
         # Queue for AudioSocketHandler to receive synthesized audio from OpenAI
         self.incoming_openai_audio_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=100) # Maxsize to prevent unbounded growth
 
@@ -92,6 +96,7 @@ class OpenAIRealtimeClient:
                             "modalities": ["audio", "text"],
                             "instructions": self.call_specific_prompt,
                             "voice": "alloy",
+                            #"temperature": 0.6,  # Minimum temperature allowed by OpenAI Realtime API (0.6-1.2)
                             "input_audio_format": "pcm16",
                             "output_audio_format": "pcm16",
                             "input_audio_transcription": {
@@ -157,8 +162,34 @@ class OpenAIRealtimeClient:
                                         },
                                         "required": ["reason", "time_description"]
                                     }
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "request_user_info",
+                                    "description": "Request real-time information from the task creator during a live call. Use this when you need additional information that wasn't provided in your initial prompt.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "question": {
+                                                "type": "string",
+                                                "description": "The specific question to ask the task creator"
+                                            },
+                                            "timeout_seconds": {
+                                                "type": "integer",
+                                                "default": 10,
+                                                "minimum": 5,
+                                                "maximum": 30,
+                                                "description": "How long to wait for the task creator's response (5-30 seconds)"
+                                            },
+                                            "recipient_message": {
+                                                "type": "string",
+                                                "description": "Message to tell the call recipient while waiting (e.g., 'Please hold while I get that information for you')"
+                                            }
+                                        },
+                                        "required": ["question", "recipient_message"]
+                                    }
                                 }
-                            ],
+                           ],
                             "turn_detection": {
                                 "type": "server_vad",
                                 "threshold": 0.3,
@@ -235,7 +266,7 @@ class OpenAIRealtimeClient:
             audio_b64 = base64.b64encode(audio_bytes_24khz_pcm16).decode('ascii')
             message = {"type": "input_audio_buffer.append", "audio": audio_b64}
             await self._websocket.send(json.dumps(message))
-            logger.debug(f"[OpenAIClient:{self.session_id_from_openai}] Sent {len(audio_bytes_24khz_pcm16)} bytes (24kHz PCM16) to OpenAI.")
+            #logger.debug(f"[OpenAIClient:{self.session_id_from_openai}] Sent {len(audio_bytes_24khz_pcm16)} bytes (24kHz PCM16) to OpenAI.")
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] OpenAI connection closed while sending audio: {e}. Triggering reconnect.")
             self.is_connected = False # Mark as disconnected to allow reconnect logic
@@ -258,6 +289,155 @@ class OpenAIRealtimeClient:
             self.is_connected = False
         except Exception as e:
             logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error triggering AI response: {e}", exc_info=True)
+
+    def set_call_context(self, call_id: int):
+        """Set the call ID and start listeners"""
+        self.call_id = call_id
+        if self.redis_client:
+            self._start_injection_listener()
+            self._start_hitl_events_listener()
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Set call context for call {call_id}")
+
+    def _start_injection_listener(self):
+        """Start Redis listener for injection commands"""
+        if self._injection_listener_task and not self._injection_listener_task.done():
+            return
+            
+        if self.call_id and self.redis_client:
+            self._injection_listener_task = self.loop.create_task(self._injection_redis_listener())
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Started injection listener for call {self.call_id}")
+
+    async def _injection_redis_listener(self):
+        """Listen for injection commands on Redis"""
+        if not self.redis_client or not self.call_id:
+            logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot start injection listener - missing redis_client or call_id")
+            return
+            
+        try:
+            # Subscribe to injection commands for this specific call
+            pattern = f"ai_commands:{self.call_id}"
+            await self.redis_client.subscribe_to_channel(pattern, self._handle_injection_command)
+                    
+        except asyncio.CancelledError:
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Injection listener cancelled")
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in injection listener: {e}", exc_info=True)
+
+    async def _handle_injection_command(self, channel: str, data: dict):
+        """Handle injection commands from Redis"""
+        try:
+            command_type = data.get("command_type")
+            
+            if command_type == "inject_system_message":
+                message = data.get("system_message", "")
+                trigger_response = data.get("trigger_response", True)
+                
+                success = await self.inject_system_message(message, trigger_response)
+                if success:
+                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Successfully processed injection command")
+                else:
+                    logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Failed to process injection command")
+            # Handle other existing commands...
+            # Note: hitl_response_provided and hitl_request_timed_out are now handled by a separate listener.
+            elif command_type in ["end_call", "send_dtmf", "reschedule_call", "request_user_info"]:
+                # These are handled by the function calling mechanism, not injection.
+                pass
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error handling injection command: {e}", exc_info=True)
+
+    async def inject_system_message(self, message: str, trigger_response: bool = True) -> bool:
+        """
+        Inject a system message into the live conversation using OpenAI Realtime API.
+        This allows providing context to the AI during an active call.
+        """
+        if not self.is_connected or not self._websocket or self._websocket.closed:
+            logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot inject system message - not connected to OpenAI")
+            return False
+        
+        try:
+            # Use OpenAI Realtime API conversation.item.create format
+            system_item = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": message}]
+                }
+            }
+            
+            await self._websocket.send(json.dumps(system_item))
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Injected system message: {message[:100]}...")
+            
+            if trigger_response:
+                # Give a small delay for the system message to be processed
+                await asyncio.sleep(0.1)
+                await self.trigger_ai_response()
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error injecting system message: {e}", exc_info=True)
+            return False
+
+    def _start_hitl_events_listener(self):
+        """Start Redis listener for HITL events"""
+        if self._hitl_events_listener_task and not self._hitl_events_listener_task.done():
+            return
+            
+        if self.call_id and self.redis_client:
+            self._hitl_events_listener_task = self.loop.create_task(self._hitl_redis_listener())
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Started HITL events listener for call {self.call_id}")
+
+    async def _hitl_redis_listener(self):
+        """Listen for HITL event commands on Redis"""
+        if not self.redis_client or not self.call_id:
+            logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Cannot start HITL listener - missing redis_client or call_id")
+            return
+            
+        try:
+            # Subscribe to HITL events for this specific call
+            pattern = f"hitl_events:{self.call_id}"
+            await self.redis_client.subscribe_to_channel(pattern, self._handle_hitl_event_command)
+                    
+        except asyncio.CancelledError:
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] HITL events listener cancelled")
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in HITL events listener: {e}", exc_info=True)
+
+    async def _handle_hitl_event_command(self, channel: str, data: dict):
+        """Handle HITL event commands from Redis"""
+        try:
+            command_type = data.get("command_type")
+            
+            if command_type == "hitl_response_provided":
+                response_text = data.get("response", "No response text provided.")
+                system_message = f"""HUMAN-IN-THE-LOOP RESPONSE:
+The task creator has provided the following information: "{response_text}"
+INSTRUCTIONS:
+1. Acknowledge you have the information.
+2. Use this information to continue the conversation and complete your objective.
+3. Do not mention the 'human-in-the-loop' or 'task creator' to the user. Simply use the information naturally."""
+                await self.inject_system_message(system_message)
+                logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Injected HITL response into conversation.")
+
+            elif command_type == "hitl_request_timed_out":
+                question_text = data.get("question", "an unspecified question")
+                system_message = f"""HUMAN-IN-THE-LOOP TIMEOUT:
+The task creator did not respond in time to your question: "{question_text}"
+INSTRUCTIONS:
+1. Acknowledge the timeout internally. Do not mention it to the user.
+2. Use your best judgment to make a sensible decision and continue the call.
+3. You could say something like, "I'll proceed with the information I have," or make a reasonable default choice.
+4. Continue with the call objective autonomously."""
+                await self.inject_system_message(system_message)
+                logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Injected HITL timeout message into conversation.")
+            
+            else:
+                logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Unknown HITL event command type: {command_type}")
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error handling HITL event command: {e}", exc_info=True)
 
     async def _receive_loop(self):
         logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Starting OpenAI receive loop.")
@@ -442,6 +622,28 @@ class OpenAIRealtimeClient:
     async def close(self):
         logger.info(f"[OpenAIClient:{self.session_id_from_openai or id(self)}] Closing OpenAI client...")
         self._stop_event.set() # Signal all loops to stop
+        
+        # Stop HITL events listener
+        if self._hitl_events_listener_task and not self._hitl_events_listener_task.done():
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Cancelling HITL events listener...")
+            self._hitl_events_listener_task.cancel()
+            try:
+                await self._hitl_events_listener_task
+            except asyncio.CancelledError:
+                logger.info(f"[OpenAIClient:{self.session_id_from_openai}] HITL events listener successfully cancelled.")
+            except Exception as e:
+                logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error cancelling HITL events listener: {e}")
+
+        # Stop injection listener
+        if self._injection_listener_task and not self._injection_listener_task.done():
+            logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Cancelling injection listener...")
+            self._injection_listener_task.cancel()
+            try:
+                await self._injection_listener_task
+            except asyncio.CancelledError:
+                logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Injection listener successfully cancelled.")
+            except Exception as e:
+                logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error cancelling injection listener: {e}")
 
         if self._receive_task and not self._receive_task.done():
             logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Cancelling receive task...")
@@ -492,6 +694,9 @@ class OpenAIRealtimeClient:
                 await self._send_function_result(call_id, function_name, result)
             elif function_name == "reschedule_call":
                 result = await self._execute_reschedule_call(arguments)
+                await self._send_function_result(call_id, function_name, result)
+            elif function_name == "request_user_info":
+                result = await self._execute_request_user_info(arguments)
                 await self._send_function_result(call_id, function_name, result)
             else:
                 logger.warning(f"[OpenAIClient:{self.session_id_from_openai}] Unknown function: {function_name}")
@@ -599,6 +804,47 @@ class OpenAIRealtimeClient:
             logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in _execute_reschedule_call: {e}", exc_info=True)
             return {"status": "error", "message": "Internal error executing reschedule_call"}
 
+    async def _execute_request_user_info(self, arguments: dict) -> dict:
+        """Execute request_user_info function and publish Redis command for HITL"""
+        try:
+            question = arguments.get("question", "")
+            timeout_seconds = arguments.get("timeout_seconds", 10)
+            recipient_message = arguments.get("recipient_message", "Please hold while I get that information for you.")
+            
+            # Import here to avoid circular imports
+            from common.data_models import RedisRequestUserInfoCommand
+            
+            if self.call_id and self.redis_client:
+                command = RedisRequestUserInfoCommand(
+                    call_attempt_id=self.call_id,
+                    question=question,
+                    timeout_seconds=timeout_seconds,
+                    recipient_message=recipient_message
+                )
+                
+                # Publish Redis command to orchestrator for HITL processing
+                channel = f"call_commands:{self.call_id}"
+                success = await self.redis_client.publish_command(channel, command.model_dump())
+                
+                if success:
+                    logger.info(f"[OpenAIClient:{self.session_id_from_openai}] Published request_user_info command. Question: {question}")
+                    return {
+                        "status": "success",
+                        "message": f"Information request sent to task creator. {recipient_message}",
+                        "question": question,
+                        "timeout_seconds": timeout_seconds
+                    }
+                else:
+                    logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Failed to publish request_user_info command")
+                    return {"status": "error", "message": "Failed to send information request"}
+            else:
+                logger.error(f"[OpenAIClient:{self.session_id_from_openai}] No call_id or Redis client available for request_user_info")
+                return {"status": "error", "message": "System error: cannot request information"}
+                
+        except Exception as e:
+            logger.error(f"[OpenAIClient:{self.session_id_from_openai}] Error in _execute_request_user_info: {e}", exc_info=True)
+            return {"status": "error", "message": "Internal error executing request_user_info"}
+
     async def _send_function_result(self, call_id: Optional[str], function_name: str, result: dict):
         """Send function execution result back to OpenAI"""
         try:
@@ -679,7 +925,7 @@ async def main_test_openai_client():
     # Simulate sending some audio to trigger a response.
     # For a real test, this would be actual 24kHz PCM16 audio.
     # Here, we send a small silent chunk just to kick off an interaction if possible,
-    # or we could send a text message if OpenAI supports it in this Realtime API version
+    # or we could send a text message if OpenAI supports it in this specific Realtime API version
     # (check OpenAI docs for sending text via this specific API).
     # Based on asty.py, it seems primarily audio-driven.
 

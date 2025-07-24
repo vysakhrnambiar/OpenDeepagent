@@ -27,3 +27,10 @@ async def serve_home_page(request: Request):
     The {"request": request} context is required by Jinja2Templates.
     """
     return templates.TemplateResponse("index.html", {"request": request})
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard_page(request: Request):
+    """
+    Serves the task management dashboard (dashboard.html).
+    """
+    return templates.TemplateResponse("dashboard.html", {"request": request})

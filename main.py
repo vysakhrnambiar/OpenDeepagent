@@ -1,6 +1,8 @@
 # main.py
 
 import sys
+import os
+import glob
 from pathlib import Path
 import asyncio
 from typing import Optional
@@ -23,6 +25,7 @@ from call_processor_service.asterisk_ami_client import AsteriskAmiClient
 from call_processor_service.call_initiator_svc import CallInitiatorService
 from task_manager.task_scheduler_svc import TaskSchedulerService
 from audio_processing_service.audio_socket_server import AudioSocketServer # Added
+from task_manager.orchestrator_svc import OrchestratorService  # Added for HITL
 # --- Global Service Instances ---
 # These will be initialized by start_background_services
 redis_client: Optional[RedisClient] = None
@@ -32,11 +35,12 @@ task_scheduler_svc: Optional[TaskSchedulerService] = None
 background_services_task: Optional[asyncio.Task] = None
 # --- NEW GLOBAL INSTANCE ---
 audio_socket_server: Optional[AudioSocketServer] = None # Added
+orchestrator_svc: Optional[OrchestratorService] = None  # Added for HITL
 
 # --- Lifecycle Functions (to be called by lifespan manager) ---
 async def actual_start_services():
     """Initializes and starts all background services. Renamed to avoid conflict."""
-    global redis_client, ami_client, call_initiator_svc, task_scheduler_svc, audio_socket_server
+    global redis_client, ami_client, call_initiator_svc, task_scheduler_svc, audio_socket_server, orchestrator_svc
 
     logger.info("actual_start_services: Initializing background services...")
     initialize_database() # Initialize DB here
@@ -83,6 +87,16 @@ async def actual_start_services():
     else:
         logger.error("actual_start_services: Redis client not available, cannot initialize AudioSocketServer.")
 
+    # --- Initialize OrchestratorService for HITL ---
+    if redis_client:
+        # Create a system-wide orchestrator for HITL handling
+        # Using user_id=0 as a system user for global HITL handling
+        orchestrator_svc = OrchestratorService(user_id=0, redis_client=redis_client)
+        await orchestrator_svc.start_hitl_listener()
+        logger.info("actual_start_services: OrchestratorService HITL listener started.")
+    else:
+        logger.error("actual_start_services: Redis client not available, cannot initialize OrchestratorService.")
+
     service_tasks_to_gather = []
     if task_scheduler_svc:
         service_tasks_to_gather.append(asyncio.create_task(task_scheduler_svc.run_scheduler_loop()))
@@ -111,7 +125,13 @@ async def actual_shutdown_services():
     if task_scheduler_svc:
         task_scheduler_svc.stop_scheduler_loop()
 
-    
+    # --- STOP ORCHESTRATOR HITL LISTENER ---
+    if orchestrator_svc:
+        try:
+            await orchestrator_svc.stop_hitl_listener()
+            logger.info("actual_shutdown_services: OrchestratorService HITL listener stopped.")
+        except Exception as e:
+            logger.error(f"actual_shutdown_services: Error stopping OrchestratorService: {e}", exc_info=True)
     
     # --- STOP AUDIOSOCKETSERVER ---
     if audio_socket_server:
@@ -144,6 +164,9 @@ async def actual_shutdown_services():
 
 # If __name__ == "__main__": block will be the primary entry point for Uvicorn
 if __name__ == "__main__":
+    # Log deletion is now handled automatically by the logger_setup module.
+    # No need to call it here anymore.
+    
     # This is where we tell uvicorn to run the app from web_interface.app
     # That app.py will have the lifespan manager.
     import uvicorn

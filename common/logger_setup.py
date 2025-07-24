@@ -26,6 +26,47 @@ except ImportError:
 # Ensure log directory exists
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# --- Log Deletion Logic ---
+_log_deletion_prompted = False
+
+def prompt_and_delete_logs():
+    """Prompts the user to delete old logs and does so if requested."""
+    global _log_deletion_prompted
+    if _log_deletion_prompted:
+        return
+    _log_deletion_prompted = True
+
+    logs_path = LOG_DIR
+    if not (logs_path.exists() and logs_path.is_dir()):
+        return # No log directory, nothing to do.
+
+    try:
+        log_files = list(logs_path.glob("*"))
+        if not log_files:
+            return # No log files to delete.
+
+        print(f"Found {len(log_files)} file(s) in the '{logs_path}' folder.")
+        response = input("Do you want to delete all logs before starting? (y/n): ").strip().lower()
+
+        if response == 'y':
+            for log_file in log_files:
+                try:
+                    if log_file.is_file():
+                        log_file.unlink()
+                        print(f"Deleted: {log_file.name}")
+                    elif log_file.is_dir():
+                        import shutil
+                        shutil.rmtree(log_file)
+                        print(f"Deleted directory: {log_file.name}")
+                except Exception as e:
+                    print(f"Could not delete {log_file.name}: {e}")
+            print("Log deletion complete.")
+        else:
+            print("Skipping log deletion.")
+    except Exception as e:
+        print(f"An error occurred during log deletion prompt: {e}")
+
+
 # Custom StreamHandler that handles encoding errors gracefully (from your original asty.py)
 class EncodingStreamHandler(logging.StreamHandler):
     def __init__(self, stream=None, encoding='utf-8'):
@@ -58,6 +99,9 @@ def setup_logger(name="OpenDeepApp", level_str=None, log_to_file=True, log_to_co
     """
     Set up a logger instance.
     """
+    # Prompt for deletion on first setup call
+    prompt_and_delete_logs()
+
     if level_str is None:
         level_str = DEFAULT_LOG_LEVEL
 

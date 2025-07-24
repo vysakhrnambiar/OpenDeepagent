@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenDeep - Task Management Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+    <style>
+        .dashboard-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #eee;
+        }
+        
+        .user-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .user-selector label {
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .user-selector select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .dashboard-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        
+        .btn:hover {
+            opacity: 0.8;
+        }
+        
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .filter-group label {
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .filter-group select,
+        .filter-group input {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .tasks-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .tasks-table th,
+        .tasks-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .tasks-table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        
+        .tasks-table tr:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        
+        .status-pending {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-queued-for-call {
+            background-color: #cce5ff;
+            color: #004085;
+        }
+        
+        .status-completed-success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status-completed-failure {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-retry-scheduled {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+        
+        .status-pending-user-info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .task-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .task-details {
+            display: none;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-left: 4px solid #007bff;
+            margin: 10px 0;
+        }
+        
+        .task-details.show {
+            display: block;
+        }
+        
+        .calls-list {
+            margin-top: 15px;
+        }
+        
+        .call-item {
+            background-color: white;
+            padding: 10px;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+        
+        .call-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .call-status {
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #495057;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 500px;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+        }
+        
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .close:hover {
+            color: black;
+        }
+        
+        .expand-btn {
+            background: none;
+            border: none;
+            color: #007bff;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .expand-btn:hover {
+            text-decoration: underline;
+        }
+        
+        .task-row.expanded {
+            background-color: #f8f9fa;
+        }
+        
+        .task-info {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .task-info strong {
+            color: #495057;
+        }
+        
+        .attempts-info {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .attempts-bar {
+            width: 60px;
+            height: 8px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .attempts-fill {
+            height: 100%;
+            background-color: #007bff;
+            transition: width 0.3s ease;
+        }
+        
+        .attempts-fill.warning {
+            background-color: #ffc107;
+        }
+        
+        .attempts-fill.danger {
+            background-color: #dc3545;
+        }
+        
+        .hitl-notifications-section {
+            background-color: #fff3cd;
+            border: 2px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .hitl-notifications-section h3 {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+        
+        .hitl-request-item {
+            background-color: #fff;
+            border: 1px solid #ffeaa7;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .hitl-request-info {
+            flex: 1;
+        }
+        
+        .hitl-request-info h4 {
+            margin: 0 0 5px 0;
+            color: #495057;
+        }
+        
+        .hitl-request-info p {
+            margin: 0;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        
+        .hitl-request-question {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-style: italic;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .hitl-request-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .hitl-notification-badge {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #dc3545;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            z-index: 1001;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        .modal-content {
+            max-width: 600px;
+        }
+        
+        .hitl-timeout-warning {
+            color: #dc3545;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <div class="dashboard-header">
+            <h1>Task Management Dashboard</h1>
+            <div class="dashboard-actions">
+                <a href="/ui/" class="btn btn-primary">Create New Campaign</a>
+                <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
+            </div>
+        </div>
+
+        <div class="user-selector">
+            <label for="user-select">Select User:</label>
+            <select id="user-select">
+                <option value="">Select a user...</option>
+            </select>
+            <span id="user-tasks-count"></span>
+        </div>
+
+        <div class="filters">
+            <div class="filter-group">
+                <label for="status-filter">Status:</label>
+                <select id="status-filter">
+                    <option value="">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="queued_for_call">Queued for Call</option>
+                    <option value="retry_scheduled">Retry Scheduled</option>
+                    <option value="pending_user_info">Pending User Info</option>
+                    <option value="completed_success">Completed Success</option>
+                    <option value="completed_failure">Completed Failure</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="phone-filter">Phone Number:</label>
+                <input type="text" id="phone-filter" placeholder="Filter by phone...">
+            </div>
+            <div class="filter-group">
+                <label for="name-filter">Contact Name:</label>
+                <input type="text" id="name-filter" placeholder="Filter by name...">
+            </div>
+        </div>
+
+        <div id="tasks-container">
+            <div class="loading" id="loading">Select a user to view tasks...</div>
+            
+            <div id="tasks-table-container" style="display: none;">
+                <table class="tasks-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Contact</th>
+                            <th>Phone</th>
+                            <th>Status</th>
+                            <th>Attempts</th>
+                            <th>Next Action</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tasks-tbody">
+                        <!-- Tasks will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="empty-state" class="empty-state" style="display: none;">
+                <h3>No tasks found</h3>
+                <p>This user has no tasks matching the current filters.</p>
+            </div>
+        </div>
+
+        <div class="pagination" id="pagination" style="display: none;">
+            <button id="prev-page" class="btn btn-secondary" disabled>Previous</button>
+            <span id="page-info">Page 1 of 1</span>
+            <button id="next-page" class="btn btn-secondary" disabled>Next</button>
+        </div>
+    </div>
+
+    <!-- HITL Notification Section -->
+    <div id="hitl-notifications" class="hitl-notifications-section" style="display: none;">
+        <h3>🔔 Human-in-the-Loop Requests</h3>
+        <div id="hitl-requests-container">
+            <!-- HITL requests will be populated here -->
+        </div>
+    </div>
+
+    <!-- HITL Response Modal -->
+    <div id="hitl-response-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📞 Call in Progress - Your Input Needed</h3>
+                <span class="close" id="hitl-modal-close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="hitl-call-info">
+                    <p><strong>Contact:</strong> <span id="hitl-contact-name"></span></p>
+                    <p><strong>Phone:</strong> <span id="hitl-phone-number"></span></p>
+                    <p><strong>Business:</strong> <span id="hitl-business-name"></span></p>
+                </div>
+                <div id="hitl-question-container">
+                    <p><strong>AI Question:</strong></p>
+                    <p id="hitl-question" style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; font-style: italic;"></p>
+                </div>
+                <div id="hitl-response-container">
+                    <label for="hitl-response-input"><strong>Your Response:</strong></label>
+                    <textarea id="hitl-response-input" rows="4" placeholder="Type your response here..." style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px;"></textarea>
+                </div>
+                <div id="hitl-timeout-info" style="margin-top: 10px;">
+                    <p><strong>Time remaining:</strong> <span id="hitl-timeout-countdown">--</span> seconds</p>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                <button class="btn btn-secondary" id="hitl-cancel-btn">Cancel</button>
+                <button class="btn btn-success" id="hitl-submit-btn">Send Response</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Database Management Section -->
+    <div class="database-management-section">
+        <h3>⚠️ Database Management</h3>
+        <div class="danger-zone">
+            <p class="warning-text">
+                <strong>Danger Zone:</strong> This will permanently delete ALL data from the database.
+            </p>
+            <button id="clear-database-btn" class="btn btn-danger">
+                🗑️ Clear Entire Database
+            </button>
+        </div>
+    </div>
+
+    <!-- Clear Database Confirmation Modal -->
+    <div id="clear-database-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3>⚠️ CLEAR ENTIRE DATABASE</h3>
+            <div class="warning-box">
+                <p><strong>This action will permanently delete:</strong></p>
+                <ul>
+                    <li>All users and campaigns</li>
+                    <li>All tasks and call history</li>
+                    <li>All transcripts and events</li>
+                    <li>All DND entries</li>
+                </ul>
+                <p class="danger-text">THIS CANNOT BE UNDONE!</p>
+            </div>
+            
+            <div class="confirmation-input">
+                <label>Type <strong>CONFIRM</strong> to proceed:</label>
+                <input type="text" id="clear-confirm-input" placeholder="Type CONFIRM here">
+            </div>
+            
+            <div class="modal-actions">
+                <button id="confirm-clear-btn" class="btn btn-danger" disabled>
+                    Clear Database
+                </button>
+                <button id="cancel-clear-btn" class="btn btn-secondary">
+                    Cancel
+                </button>
+            </div>
+            
+            <div id="clear-progress" style="display: none;">
+                <p>Creating backup and clearing database...</p>
+                <div class="progress-bar">
+                    <div class="progress-fill"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Confirm Delete</h3>
+                <span class="close" id="delete-modal-close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to permanently delete this task?</p>
+                <p><strong>Contact:</strong> <span id="delete-contact-name"></span></p>
+                <p><strong>Phone:</strong> <span id="delete-phone-number"></span></p>
+                <p><strong>Status:</strong> <span id="delete-status"></span></p>
+                <br>
+                <p style="color: #dc3545; font-weight: 500;">This action cannot be undone. All associated calls and data will be permanently removed.</p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                <button class="btn btn-secondary" id="delete-cancel-btn">Cancel</button>
+                <button class="btn btn-danger" id="delete-confirm-btn">Delete Task</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', path='/js/dashboard.js') }}"></script>
+</body>
+</html>

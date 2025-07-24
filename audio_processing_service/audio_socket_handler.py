@@ -365,8 +365,8 @@ class AudioSocketHandler:
                             loop=self.loop,
                             redis_client=self.redis_client
                         )
-                        # Set context for function calling
-                        self.openai_client.call_id = self.call_id
+                        # Set context for function calling and start injection listener
+                        self.openai_client.set_call_context(self.call_id)
                         
                         conn_success = await self.openai_client.connect_and_initialize()
                         if conn_success:

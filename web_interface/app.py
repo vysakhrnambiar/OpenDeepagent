@@ -1,11 +1,12 @@
 # web_interface/app.py
 
 import asyncio # Add asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from contextlib import asynccontextmanager # Add asynccontextmanager
-from typing import AsyncGenerator, Optional          # Add AsyncGenerator and Optional
+from typing import AsyncGenerator, Optional, Dict, Set          # Add AsyncGenerator and Optional
+import json
 
 # --- Path Setup for main module access ---
 # This ensures that when app.py is loaded, main.py's directory (project root) is in path
@@ -41,6 +42,43 @@ from . import routes_ui, routes_api # Relative imports for local package
 
 # Store the background task handle globally within the scope of app.py for the lifespan manager
 _lifespan_background_task: Optional[asyncio.Task] = None
+
+# WebSocket connection management for HITL notifications
+class HITLConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+    
+    async def connect(self, websocket: WebSocket, username: str):
+        await websocket.accept()
+        if username not in self.active_connections:
+            self.active_connections[username] = set()
+        self.active_connections[username].add(websocket)
+        main_logger.info(f"WebSocket connected for user: {username}")
+    
+    def disconnect(self, websocket: WebSocket, username: str):
+        if username in self.active_connections:
+            self.active_connections[username].discard(websocket)
+            if not self.active_connections[username]:
+                del self.active_connections[username]
+        main_logger.info(f"WebSocket disconnected for user: {username}")
+    
+    async def send_to_user(self, username: str, message: dict):
+        if username in self.active_connections:
+            disconnected = []
+            for websocket in self.active_connections[username]:
+                try:
+                    await websocket.send_text(json.dumps(message))
+                except:
+                    disconnected.append(websocket)
+            
+            # Clean up disconnected sockets
+            for ws in disconnected:
+                self.active_connections[username].discard(ws)
+            
+            if not self.active_connections[username]:
+                del self.active_connections[username]
+
+hitl_manager = HITLConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI) -> AsyncGenerator[None, None]:
@@ -91,6 +129,17 @@ app = FastAPI(
     lifespan=lifespan # Assign the lifespan manager here
 )
 
+# WebSocket endpoint for HITL notifications
+@app.websocket("/ws/hitl/{username}")
+async def hitl_websocket_endpoint(websocket: WebSocket, username: str):
+    await hitl_manager.connect(websocket, username)
+    try:
+        while True:
+            # Keep the connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        hitl_manager.disconnect(websocket, username)
+
 # Include routers for API and UI
 app.include_router(routes_api.router, prefix="/api", tags=["API"])
 app.include_router(routes_ui.router, tags=["UI"]) # Or prefix="/ui" if all UI routes are under /ui
@@ -101,3 +150,6 @@ if static_dir.is_dir(): # More robust check
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 else:
     main_logger.warning(f"Static directory not found at {static_dir}, /static route not mounted.")
+
+# Make hitl_manager available globally
+app.state.hitl_manager = hitl_manager

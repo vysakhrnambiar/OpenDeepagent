@@ -23,7 +23,7 @@ async def search_internet(query: str) -> str:
     logger.info(f"Performing internet search for query: '{query}'")
     gemini_client = GoogleGeminiClient()
     try:
-        results = await gemini_client.generate_grounded_response(prompt=query)
+        results = await gemini_client.perform_grounded_search(query=query)
         logger.info(f"Search results for '{query}': {results[:200]}...") 
         return results if results else "No information found."
     except Exception as e:

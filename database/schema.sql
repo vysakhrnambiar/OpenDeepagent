@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     business_name TEXT,
     person_name TEXT,
     phone_number TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',                      -- pending, in-progress, completed, failed_conclusive, on_hold, pending_analysis
+    status TEXT DEFAULT 'pending',                      -- pending, in-progress, completed, failed_conclusive, on_hold, pending_analysis, pending_user_info
     overall_conclusion TEXT,                            -- Final summary for this specific task
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     max_attempts INTEGER DEFAULT 3,
     current_attempt_count INTEGER DEFAULT 0,
     initial_schedule_time DATETIME NOT NULL,
+    -- HITL (Human-in-the-Loop) support fields
+    user_info_request TEXT,                             -- The question asked to the task creator
+    user_info_response TEXT,                            -- The response from the task creator
+    user_info_timeout INTEGER DEFAULT 10,              -- Timeout in seconds for user response
+    user_info_requested_at TIMESTAMP,                   -- When the request was made
     FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 );
 
@@ -77,6 +82,16 @@ CREATE TABLE IF NOT EXISTS call_events (
     FOREIGN KEY (call_id) REFERENCES calls(id) ON DELETE CASCADE
 );
 
+-- Task events table for tracking task lifecycle changes
+CREATE TABLE IF NOT EXISTS task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,                           -- e.g., 'status_changed', 'retry_scheduled', 'user_info_requested'
+    event_details TEXT,                                 -- JSON string with event-specific data
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT 'system',                   -- 'system', 'user', or service name
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS dnd_list (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,3 +130,8 @@ CREATE INDEX IF NOT EXISTS idx_calls_status ON calls (status);
 CREATE INDEX IF NOT EXISTS idx_call_transcripts_call_id ON call_transcripts (call_id);
 CREATE INDEX IF NOT EXISTS idx_call_events_call_id ON call_events (call_id);
 CREATE INDEX IF NOT EXISTS idx_dnd_list_phone_number ON dnd_list (phone_number);
+CREATE INDEX IF NOT EXISTS idx_tasks_pending_user_info ON tasks (status, user_info_requested_at) WHERE status = 'pending_user_info';
+CREATE INDEX IF NOT EXISTS idx_tasks_user_info_timeout ON tasks (user_info_requested_at, user_info_timeout);
+CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events (task_id);
+CREATE INDEX IF NOT EXISTS idx_task_events_event_type ON task_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_task_events_created_at ON task_events (created_at);
